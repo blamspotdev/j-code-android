@@ -32,8 +32,9 @@ class ExtensionDrawerActions(
     /** Whether the extension may keep running while its drawer tab is not on screen (per-extension
      *  permission). The shell reads this to decide what to tear down when the selection changes. */
     val keepAliveFor: (extensionId: String) -> Boolean = { true },
-    /** Starts a long-lived process in the Linux runtime, which is what runs an imported `.vsix`. */
-    val spawnProcess: ((command: String) -> Process?)? = null,
+    /** Starts a long-lived process in the Linux runtime, which is what runs an imported `.vsix`.
+     *  The extension id travels with it so its whole guest tree can be found and reaped later. */
+    val spawnProcess: ((extensionId: String, command: String) -> Process?)? = null,
     /** Surface a webview panel the extension created as an editor tab (`createWebviewPanel`). */
     val onOpenPanel: (extensionId: String, handle: String, title: String) -> Unit = { _, _, _ -> },
 )

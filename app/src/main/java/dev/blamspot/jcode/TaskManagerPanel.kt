@@ -297,6 +297,8 @@ private fun BackgroundExtensionRow(
             if (info.serviceCount > 0) add("${info.serviceCount} server${if (info.serviceCount > 1) "s" else ""}")
             if (info.hasDevice) add("virtual device")
             if (info.hasAdb) add("device adb")
+            // What it is running in the runtime, which is the part Stop has to take with it.
+            if (info.processCount > 0) add("${info.processCount} process${if (info.processCount > 1) "es" else ""}")
         }.joinToString(" · ").ifEmpty { "running" }
     }
     Surface(

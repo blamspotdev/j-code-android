@@ -35,6 +35,7 @@ import dev.blamspot.jcode.debug.DebugController
 import dev.blamspot.jcode.core.distro.SdkCatalogAction
 import dev.blamspot.jcode.core.distro.DistroService
 import dev.blamspot.jcode.core.distro.DistroServiceLocator
+import dev.blamspot.jcode.core.distro.GuestProcessTree
 import dev.blamspot.jcode.ext.NativeExtensionLoader
 import dev.blamspot.jcode.vdevice.VirtualDeviceBridge
 import dev.blamspot.jcode.core.distro.adb.AdbBridge
@@ -5301,6 +5302,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             command = command,
             userOverride = user,
             extraPath = extraPath,
+            owner = extId,
         ) ?: return false
         runtimeServices[key] = process
         // Drain stdout/stderr so the OS pipe buffers never fill and block the server. Kept as daemon
@@ -5317,24 +5319,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * to talk to it rather than just start it — the `.vsix` extension host speaks JSON over stdin
      * and stdout. Unlike [startRuntimeService] the caller owns the process and must destroy it.
      */
-    fun spawnRuntimeProcess(command: String): Process? =
-        distroService.spawnStdioProcess(command = command, userOverride = "root")
+    fun spawnRuntimeProcess(extId: String, command: String): Process? =
+        distroService.spawnStdioProcess(
+            command = command,
+            userOverride = "root",
+            owner = extId,
+        )
 
     fun stopRuntimeService(extId: String, id: String) {
-        runtimeServices.remove(svcKey(extId, id))?.let { runCatching { it.destroy() } }
+        runtimeServices.remove(svcKey(extId, id))?.let { GuestProcessTree.destroy(it) }
     }
 
-    /** Destroy every runtime service started by [extId] (proot --kill-on-exit reaps each tree). */
+    /** Destroy every runtime service started by [extId], and anything it forked. */
     private fun reapExtensionServices(extId: String) {
         val prefix = "$extId "
         runtimeServices.keys.filter { it.startsWith(prefix) }.forEach { key ->
-            runtimeServices.remove(key)?.let { runCatching { it.destroy() } }
+            runtimeServices.remove(key)?.let { GuestProcessTree.destroy(it) }
         }
     }
 
     /** Reap every runtime service (called on project/workspace close and ViewModel teardown). */
     fun stopAllRuntimeServices() {
-        runtimeServices.values.forEach { runCatching { it.destroy() } }
+        runtimeServices.values.forEach { GuestProcessTree.destroy(it) }
         runtimeServices.clear()
     }
 
@@ -5372,6 +5378,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val hasDevice: Boolean = false,
         /** The device's adb daemon, which is the extension's too. */
         val hasAdb: Boolean = false,
+        /** Guest processes the extension owns — its host, and whatever that started. */
+        val processCount: Int = 0,
     )
 
     private val _suspendedBackgroundExtensions = MutableStateFlow<Set<String>>(emptySet())
@@ -5396,6 +5404,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val scmIds = dev.blamspot.jcode.workbench.ScmWebViewHolder.ids().toSet()
         val vsixIds = dev.blamspot.jcode.workbench.VsixViewHolder.ids().toSet()
         val serviceCounts = runtimeServices.keys.groupingBy { it.substringBefore(' ') }.eachCount()
+        // Everything running in the runtime on some extension's behalf, however deeply it forked.
+        val processCounts = GuestProcessTree.ownerCounts()
         val suspended = _suspendedBackgroundExtensions.value
         val names = installedExtensions.value.associate { it.id to it.name }
         // The pack that provides the virtual device does background work of a kind this list did
@@ -5407,7 +5417,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val hasDevice = devicePack != null && deviceRunning
         val adbRunning = devicePack != null && virtualDeviceAdbRunning
         val deviceId = devicePack?.id?.takeIf { hasDevice || adbRunning }
-        return (scmIds + vsixIds + serviceCounts.keys + suspended + listOfNotNull(deviceId)).map { id ->
+        return (scmIds + vsixIds + serviceCounts.keys + processCounts.keys + suspended + listOfNotNull(deviceId)).map { id ->
             BackgroundExtensionInfo(
                 id = id,
                 name = names[id] ?: id,
@@ -5416,6 +5426,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 suspended = id in suspended,
                 hasDevice = id == deviceId && hasDevice,
                 hasAdb = id == deviceId && adbRunning,
+                processCount = processCounts[id] ?: 0,
             )
         }.sortedBy { it.name.lowercase() }
     }
@@ -5445,6 +5456,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (dev.blamspot.jcode.workbench.VsixViewHolder.get(id) != null) {
                 dev.blamspot.jcode.workbench.VsixViewHolder.destroy(id)
+            }
+            // Last word. Each teardown above ends the tree it holds a launcher for, but a tree whose
+            // launcher was lost — a session replaced without being disposed, a process that forked
+            // its way out — is only reachable by the tag it carries. Stop means stopped.
+            sweepOwnedProcesses(id)
+        }
+    }
+
+    /**
+     * Kill anything still running on [extId]'s behalf, after its hosts and services have been ended.
+     *
+     * Delayed and off the main thread: a tree torn down properly is already going away, and killing
+     * what is mid-exit would only race it. What is still there a few seconds later is a leak.
+     */
+    private fun sweepOwnedProcesses(extId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(SWEEP_DELAY_MS)
+            GuestProcessTree.pidsOwnedBy(extId).forEach {
+                runCatching { android.system.Os.kill(it, android.system.OsConstants.SIGKILL) }
             }
         }
     }
@@ -6620,6 +6650,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val VIRTUAL_HARDWARE_TAB_ID = "jcode://virtual-hardware"
         /** `adb pair` is one round trip to adbd; anything past this is a wrong port or a closed dialog. */
         private const val ADB_PAIR_TIMEOUT_MS = 60_000L
+
+        /** How long a stopped extension gets to go away before what is left is treated as leaked. */
+        private const val SWEEP_DELAY_MS = 4_000L
         /** host:port, with nothing a shell could read as anything but a literal. */
         private val ADB_TARGET_RE = Regex("""[A-Za-z0-9._\[\]:-]+:\d{1,5}""")
         /** Extensions routed to the built-in image viewer instead of the text editor. */

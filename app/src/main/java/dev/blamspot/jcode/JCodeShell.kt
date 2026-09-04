@@ -167,6 +167,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.text.font.FontWeight
@@ -369,6 +370,7 @@ import dev.blamspot.jcode.workbench.VsixPanelPage
 import dev.blamspot.jcode.workbench.VsixTerminals
 import dev.blamspot.jcode.workbench.VsixViewHolder
 import dev.blamspot.jcode.workbench.hasClipboardImage
+import dev.blamspot.jcode.workbench.marketplace.extensionIconBitmap
 import dev.blamspot.jcode.workbench.ScmBackgroundHost
 import dev.blamspot.jcode.workbench.ScmWebViewHolder
 import dev.blamspot.jcode.workbench.installedVsixExtensions
@@ -3196,6 +3198,12 @@ private fun JCodeShell(
     // Mirror Settings' most-specific-scope rule so a font-size nudge isn't masked by an existing
     // project override.
     val paletteFontScope = if (selectedProject?.fsPath is FsPath.Local) ConfigScope.Project else ConfigScope.Workspace
+    // A `.vsix` declares far more commands than it puts on its view, and VS Code's home for the rest
+    // is the command palette. Read as Compose state so an extension starting or stopping re-registers.
+    val paletteVsixCommands = VsixViewHolder.paletteCommands.entries
+        .mapNotNull { (id, commands) ->
+            vsixExtensions.firstOrNull { it.id == id }?.let { it to commands }
+        }
 
     DisposableEffect(
         onCreateProject, openFolderLauncher, onOpenWorkspaceConfig, onOpenProjectConfig, onAutoSetup,
@@ -3203,6 +3211,7 @@ private fun JCodeShell(
         paletteEditorActive, paletteLanguageIdentified, chromeHidden, fullscreenMode, keepAwakeMode,
         orientationLockedMode, paletteFontSize,
         paletteBrowserActive, paletteBrowserBack, paletteBrowserForward, paletteBrowserLoading,
+        paletteVsixCommands,
     ) {
         CommandRegistry.clear()
         // A configurable command registers only while enabled in Settings → Command Palette AND its
@@ -3385,6 +3394,19 @@ private fun JCodeShell(
             whenPredicate = { selectedProject?.fsPath is FsPath.Local },
             icon = JCodeIcon.Code,
         )
+        paletteVsixCommands.forEach { (extension, commands) ->
+            commands.forEach { command ->
+                CommandRegistry.register(
+                    // Namespaced by extension: two extensions may declare the same command id, and
+                    // the registry keys by id alone.
+                    id = "vsix.${extension.id}.${command.id}",
+                    title = command.title,
+                    group = extension.tabName,
+                    action = { VsixViewHolder.get(extension.id)?.execute(command.id) },
+                    icon = contributedMenuIcon(command.codicon),
+                )
+            }
+        }
         onDispose { }
     }
 
@@ -5041,6 +5063,7 @@ private fun WorkbenchRightSidebar(
                             icon = JCodeIcon.Extensions,
                             selected = selected == RightPanelSelection.Extension(ext.id),
                             onClick = { onSelected(RightPanelSelection.Extension(ext.id)) },
+                            iconFile = ext.iconFile,
                         )
                     }
                 }
@@ -5145,6 +5168,8 @@ private fun RightPanelTabItem(
     icon: JCodeIcon,
     selected: Boolean,
     onClick: () -> Unit,
+    /** An extension's shipped icon, drawn in place of [icon] once it has decoded. */
+    iconFile: java.io.File? = null,
 ) {
     // Flat, like the editor's tab strip, the terminal's and the DevTools pane switcher. This was the
     // last row of rounded pills in the workbench, and it sits directly above one of the flat ones —
@@ -5161,12 +5186,25 @@ private fun RightPanelTabItem(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.s),
     ) {
-        Icon(
-            painter = jcIcon(icon),
-            contentDescription = null,
-            modifier = Modifier.size(IconSize.md),
-            tint = tint,
-        )
+        // An extension ships its own mark, and a strip of identical puzzle pieces is no way to tell
+        // two extensions apart. Its own colours, not the tab tint: the icon is artwork, and a
+        // selected/unselected wash would be recolouring someone's logo.
+        val extensionIcon = extensionIconBitmap(iconFile)
+        if (extensionIcon != null) {
+            Image(
+                bitmap = extensionIcon,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(IconSize.md),
+            )
+        } else {
+            Icon(
+                painter = jcIcon(icon),
+                contentDescription = null,
+                modifier = Modifier.size(IconSize.md),
+                tint = tint,
+            )
+        }
         Text(text = label, style = MaterialTheme.typography.labelMedium, color = tint)
     }
 }
