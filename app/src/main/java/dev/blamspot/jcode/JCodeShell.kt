@@ -293,6 +293,7 @@ import dev.blamspot.jcode.workbench.marketplace.hasScmClient
 import dev.blamspot.jcode.workbench.marketplace.VmPanel
 import dev.blamspot.jcode.workbench.marketplace.hasVmManagerClient
 import dev.blamspot.jcode.workbench.marketplace.ExtensionDetailPage
+import dev.blamspot.jcode.workbench.marketplace.ToolchainDepActions
 import dev.blamspot.jcode.workbench.marketplace.ExtensionPermissionsPage
 import dev.blamspot.jcode.workbench.marketplace.ExtensionSourcesPage
 import dev.blamspot.jcode.workbench.marketplace.LocalExtensionActivation
@@ -3805,6 +3806,17 @@ private fun JCodeShell(
                                             onOpenSdkDetail = managerActions.onOpenSdkDetail,
                                             onOpenLspDetail = managerActions.onOpenLspDetail,
                                             onOpenDebugEngineDetail = managerActions.onOpenDebugEngineDetail,
+                                            // The three catalogs behind a "Suggested: android-sdk"
+                                            // row, so it can install the thing it names instead of
+                                            // pointing at the panel that could.
+                                            toolchains = ToolchainDepActions(
+                                                installedSdks = sdkCatalogState.installedEntryIds,
+                                                installedLsps = lspCatalogState.installedEntryIds,
+                                                installedDebugEngines = LocalDebugCatalogState.current.installedEntryIds,
+                                                onInstallSdk = managerActions.onInstallSdkCatalogEntry,
+                                                onInstallLsp = managerActions.onInstallLspCatalogEntry,
+                                                onInstallDebugEngine = managerActions.onInstallDebugEngine,
+                                            ),
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }

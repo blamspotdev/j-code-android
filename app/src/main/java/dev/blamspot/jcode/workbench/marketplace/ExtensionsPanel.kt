@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
@@ -604,6 +605,7 @@ internal fun ExtensionDetailPage(
     onOpenSdkDetail: (String) -> Unit,
     onOpenLspDetail: (String) -> Unit,
     onOpenDebugEngineDetail: (String) -> Unit,
+    toolchains: ToolchainDepActions,
     modifier: Modifier = Modifier,
 ) {
     val id = entry?.id ?: installed?.id ?: return
@@ -689,11 +691,11 @@ internal fun ExtensionDetailPage(
                     description = "Toolchains and extensions this extension needs or suggests.",
                 ) {
                     RequirementList(
-                        "Required", requires, available, installedIds, autoInstalled = true,
+                        "Required", requires, available, installedIds, toolchains, autoInstalled = true,
                         onOpenExtensionDetail, onOpenSdkDetail, onOpenLspDetail, onOpenDebugEngineDetail,
                     )
                     RequirementList(
-                        "Suggested", suggests, available, installedIds, autoInstalled = false,
+                        "Suggested", suggests, available, installedIds, toolchains, autoInstalled = false,
                         onOpenExtensionDetail, onOpenSdkDetail, onOpenLspDetail, onOpenDebugEngineDetail,
                     )
                 }
@@ -706,6 +708,7 @@ internal fun ExtensionDetailPage(
             entry = entry,
             available = available,
             installedIds = installedIds,
+            toolchains = toolchains,
             busy = busy,
             onInstall = onInstall,
             onProceed = { onInstall(entry); showDeps = false },
@@ -1309,12 +1312,94 @@ private fun SampleBlock(sample: CodeSample) {
     }
 }
 
+/** A toolchain a dependency block can name. Each kind has its own catalog behind it, which is why
+ *  an id on its own cannot say where it comes from or who installs it. */
+internal enum class ToolchainDepKind(val label: String) {
+    Sdk("toolchain"),
+    Lsp("language server"),
+    Debugger("debugger"),
+}
+
+/**
+ * What a dependency row needs to act on a toolchain instead of only naming one: what each catalog
+ * already has, and how to start an install.
+ *
+ * A suggested *extension* has always had an Install button on the spot. A suggested *toolchain* was
+ * a line of text ending "install via Toolchains" — it named the panel to go to and left the reader
+ * to go there, which is how an Android Dev Pack could sit beside an uninstalled Android SDK until a
+ * run failed on a missing `gradle`.
+ */
+@Immutable
+internal data class ToolchainDepActions(
+    val installedSdks: Set<String> = emptySet(),
+    val installedLsps: Set<String> = emptySet(),
+    val installedDebugEngines: Set<String> = emptySet(),
+    val onInstallSdk: (String) -> Unit = {},
+    val onInstallLsp: (String) -> Unit = {},
+    val onInstallDebugEngine: (String) -> Unit = {},
+) {
+    fun isInstalled(kind: ToolchainDepKind, id: String): Boolean = id in when (kind) {
+        ToolchainDepKind.Sdk -> installedSdks
+        ToolchainDepKind.Lsp -> installedLsps
+        ToolchainDepKind.Debugger -> installedDebugEngines
+    }
+
+    fun install(kind: ToolchainDepKind, id: String) {
+        when (kind) {
+            ToolchainDepKind.Sdk -> onInstallSdk(id)
+            ToolchainDepKind.Lsp -> onInstallLsp(id)
+            ToolchainDepKind.Debugger -> onInstallDebugEngine(id)
+        }
+    }
+}
+
+/** Every toolchain these deps name, in the order the groups list them, tagged with its catalog. */
+private fun ExtensionDeps.toolchainIds(): List<Pair<ToolchainDepKind, String>> =
+    sdks.map { ToolchainDepKind.Sdk to it } +
+        lsps.map { ToolchainDepKind.Lsp to it } +
+        dbg.map { ToolchainDepKind.Debugger to it }
+
+/**
+ * The toolchain rows of one dependency group in the install dialog. What an id that is not installed
+ * offers is the whole difference between the two groups: a required one is on its way in regardless,
+ * while a suggested one happens only if the reader asks for it here.
+ */
+@Composable
+private fun ToolchainDepRows(
+    deps: ExtensionDeps,
+    toolchains: ToolchainDepActions,
+    offerInstall: Boolean,
+    busy: Boolean = false,
+) {
+    deps.toolchainIds().forEach { (kind, id) ->
+        DependencyRow(name = id, kind = kind.label) {
+            when {
+                toolchains.isInstalled(kind, id) -> Text(
+                    "Installed",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                offerInstall -> TextButton(
+                    onClick = { toolchains.install(kind, id) },
+                    enabled = !busy,
+                ) { Text("Install") }
+                else -> Text(
+                    "Auto-install",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun RequirementList(
     label: String,
     deps: ExtensionDeps,
     available: List<MarketplaceEntry>,
     installedIds: Set<String>,
+    toolchains: ToolchainDepActions,
     autoInstalled: Boolean,
     onOpenExtensionDetail: (String) -> Unit,
     onOpenSdkDetail: (String) -> Unit,
@@ -1332,9 +1417,23 @@ private fun RequirementList(
             onClick = { onOpenExtensionDetail(id) },
         )
     }
-    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain · $pendingSuffix", onClick = { onOpenSdkDetail(id) }) }
-    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · $pendingSuffix", onClick = { onOpenLspDetail(id) }) }
-    deps.dbg.forEach { id -> DependencyRow(name = id, kind = "debugger · $pendingSuffix", onClick = { onOpenDebugEngineDetail(id) }) }
+    // Toolchains report their own catalog's state for the same reason extensions do: a row still
+    // reading "installs automatically" after the install happened is this page disagreeing with the
+    // manager it opens.
+    deps.toolchainIds().forEach { (kind, id) ->
+        val state = if (toolchains.isInstalled(kind, id)) "installed" else pendingSuffix
+        DependencyRow(
+            name = id,
+            kind = "${kind.label} · $state",
+            onClick = {
+                when (kind) {
+                    ToolchainDepKind.Sdk -> onOpenSdkDetail(id)
+                    ToolchainDepKind.Lsp -> onOpenLspDetail(id)
+                    ToolchainDepKind.Debugger -> onOpenDebugEngineDetail(id)
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -1342,6 +1441,7 @@ private fun DependencyDialog(
     entry: MarketplaceEntry,
     available: List<MarketplaceEntry>,
     installedIds: Set<String>,
+    toolchains: ToolchainDepActions,
     busy: Boolean,
     onInstall: (MarketplaceEntry) -> Unit,
     onProceed: () -> Unit,
@@ -1353,15 +1453,21 @@ private fun DependencyDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Space.md)) {
                 if (!entry.requires.isEmpty) {
+                    // Split by kind because the two halves fail differently: a required extension
+                    // aborts the install, while a required toolchain is best-effort (a heavy or
+                    // flaky download must not roll back an otherwise usable pack). Saying "if any
+                    // of them fails, the extension isn't installed" of both was wrong about the
+                    // half that matters here.
                     Text(
-                        "Required items are installed automatically; if any of them fails, the " +
-                            "extension isn't installed.",
+                        "Required extensions install first, and the install stops if one fails. " +
+                            "Required toolchains are installed too, but a download that fails " +
+                            "leaves the extension in place and the toolchain retryable.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                RequiredGroup(entry.requires, available, installedIds)
-                SuggestedGroup(entry.suggests, available, installedIds, busy, onInstall)
+                RequiredGroup(entry.requires, available, installedIds, toolchains)
+                SuggestedGroup(entry.suggests, available, installedIds, toolchains, busy, onInstall)
             }
         },
         confirmButton = {
@@ -1376,23 +1482,22 @@ private fun RequiredGroup(
     deps: ExtensionDeps,
     available: List<MarketplaceEntry>,
     installedIds: Set<String>,
+    toolchains: ToolchainDepActions,
 ) {
     if (deps.isEmpty) return
     Text("Required", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-    val status: @Composable (installed: Boolean) -> Unit = { installed ->
-        Text(
-            if (installed) "Installed" else "Auto-install",
-            style = MaterialTheme.typography.labelMedium,
-            color = if (installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
     deps.extensions.forEach { id ->
         val depEntry = available.firstOrNull { it.id == id }
-        DependencyRow(name = depEntry?.name ?: id, kind = "extension") { status(id in installedIds) }
+        val installed = id in installedIds
+        DependencyRow(name = depEntry?.name ?: id, kind = "extension") {
+            Text(
+                if (installed) "Installed" else "Auto-install",
+                style = MaterialTheme.typography.labelMedium,
+                color = if (installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
-    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain") { status(false) } }
-    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server") { status(false) } }
-    deps.dbg.forEach { id -> DependencyRow(name = id, kind = "debugger") { status(false) } }
+    ToolchainDepRows(deps, toolchains, offerInstall = false)
 }
 
 @Composable
@@ -1400,6 +1505,7 @@ private fun SuggestedGroup(
     deps: ExtensionDeps,
     available: List<MarketplaceEntry>,
     installedIds: Set<String>,
+    toolchains: ToolchainDepActions,
     busy: Boolean,
     onInstall: (MarketplaceEntry) -> Unit,
 ) {
@@ -1423,9 +1529,7 @@ private fun SuggestedGroup(
             }
         }
     }
-    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain · install via Toolchains") {} }
-    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · install via Toolchains") {} }
-    deps.dbg.forEach { id -> DependencyRow(name = id, kind = "debugger · install via Toolchains") {} }
+    ToolchainDepRows(deps, toolchains, offerInstall = true, busy = busy)
 }
 
 @Composable
