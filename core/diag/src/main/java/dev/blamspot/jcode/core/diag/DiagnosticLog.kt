@@ -56,7 +56,7 @@ object DiagnosticLog {
     private const val MAX_BYTES = 2L * 1024 * 1024
     private const val RECENT_LINES = 600
 
-    private val timestamp = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+    private val timestamp = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.ROOT)
 
     private val lock = Any()
     private val recent = ArrayDeque<String>(RECENT_LINES)

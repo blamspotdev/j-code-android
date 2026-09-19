@@ -2073,7 +2073,7 @@ private fun formatLogSize(bytes: Long): String = when {
     bytes <= 0L -> "Nothing yet"
     bytes < 1024L -> "$bytes B"
     bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
-    else -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    else -> String.format(Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0))
 }
 
 /**

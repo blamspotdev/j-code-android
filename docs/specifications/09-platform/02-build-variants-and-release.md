@@ -331,7 +331,7 @@ Keystore resolution order:
 2. `$env:JCODE_KEYSTORE`
 3. The default `~/.jcode/jcode-release.jks`
 4. An interactive file picker
-5. An offer to create one: `keytool -genkeypair -keystore <path> -alias jcode -keyalg RSA -keysize 4096 -validity 10000 -dname 'CN=JCode, O=JCode, C=US'`
+5. An offer to create one: `keytool -genkeypair -keystore <path> -alias jcode -keyalg RSA -keysize 4096 -validity 10000 -dname 'CN=JCode, O=Blamspot, C=PH'`
 
 Password from `$env:JCODE_KEYSTORE_PASS` or a password file. If `JCODE_KEYSTORE` is set but is not a
 file, or no password is available, the build **fails** rather than silently producing an unsigned

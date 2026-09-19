@@ -275,7 +275,7 @@ installed. Before spawning it performs several guest-side repairs:
 
 | Step | Reason |
 |---|---|
-| `rootfsManager.ensureRootfsNetworking(rootfsPath)` | Minimal ubuntu-base images ship no usable `/etc/resolv.conf`, so `apt` from the terminal would fail. Guarded writes, so it is a cheap no-op once configured |
+| `rootfsManager.ensureRootfsConfig(rootfsPath)` | Minimal ubuntu-base images ship no usable `/etc/resolv.conf`, so `apt` from the terminal would fail, and no system locale. Guarded writes, so it is a cheap no-op once configured |
 | Create `~/.hushlogin` for root and the user | Suppresses Debian/Ubuntu's `/etc/bash.bashrc` sudo hint, which runs `$(groups)` and prints `groups: cannot find name for group ID N` for the inherited Android gids. Also quiets the login MOTD |
 | Write a default `htoprc` (only when absent) | htop's desktop default packs so many wide columns that the Command column falls off a phone screen, leaving a wall of `root`. The compact layout is PID/CPU%/MEM%/Command with threads hidden. Never clobbers a user's own settings |
 | Install `/etc/profile.d/jcode-open.sh` | The shell-integration script |

@@ -92,8 +92,8 @@ internal class CpuStatSampler private constructor(private val fakeProcDir: File)
             if (idleDeltaUs > wallDeltaUs) idleDeltaUs = wallDeltaUs
             val busyDeltaUs = wallDeltaUs - idleDeltaUs
 
-            idle[c] += idleDeltaUs / US_PER_JIFFIE
-            val busyJiffies = busyDeltaUs / US_PER_JIFFIE
+            idle[c] += idleDeltaUs / MICROS_PER_JIFFY
+            val busyJiffies = busyDeltaUs / MICROS_PER_JIFFY
             // Split busy into system (~1/3) and user (rest); htop sums them for the load %, so the
             // exact split is cosmetic — it just colours the meter realistically.
             system[c] += busyJiffies / 3
@@ -154,7 +154,7 @@ internal class CpuStatSampler private constructor(private val fakeProcDir: File)
 
     companion object {
         private const val SAMPLE_MS = 1_000L
-        private const val US_PER_JIFFIE = 10_000L // USER_HZ = 100 → 1 jiffie = 10 ms = 10000 µs
+        private const val MICROS_PER_JIFFY = 10_000L // USER_HZ = 100 → 1 jiffy = 10 ms = 10000 µs
         private const val L1_ALPHA = 0.30
         private const val L5_ALPHA = 0.10
         private const val L15_ALPHA = 0.03

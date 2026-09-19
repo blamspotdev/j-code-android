@@ -135,7 +135,7 @@ object OutputLog {
     }
 
     private fun timeNow(): String =
-        java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+        java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT).format(java.util.Date())
 
     // ESC/BEL built from code points (no literal control bytes in source). Every alternative starts
     // with ESC, so plain bracketed text in the build output ("[setup]", "[1/2]") is left untouched.

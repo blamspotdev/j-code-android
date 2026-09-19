@@ -300,7 +300,7 @@ class DistroService(
     suspend fun deleteEnvironment(environmentId: String): Boolean {
         val removed = rootfsManager.removeDistro(environmentId)
         verifiedDistroUsers.keys.removeAll { it.startsWith("$environmentId:") }
-        networkingConfigured.remove(environmentId)
+        rootfsConfigured.remove(environmentId)
         dataStore.edit { prefs ->
             prefs.remove(installedEntriesKey(environmentId))
             prefs.remove(installedLspEntriesKey(environmentId))
@@ -1432,8 +1432,8 @@ class DistroService(
         return File(rootfs, "usr/bin/sudo").exists() || File(rootfs, "usr/local/bin/sudo").exists()
     }
 
-    /** distroIds whose DNS/host config has been ensured this process, so it runs at most once each. */
-    private val networkingConfigured = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    /** distroIds whose rootfs config (DNS, locale) has been ensured this process, so it runs at most once each. */
+    private val rootfsConfigured = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /** Last failed ensure per (distroId:user): a broken rootfs must not re-run the script on every refresh. */
     private val distroUserEnsureFailures = java.util.concurrent.ConcurrentHashMap<String, Long>()
@@ -1854,11 +1854,12 @@ class DistroService(
             return ExecResult(internalError = "proot binary is not available.", exitCode = 1)
         }
 
-        // Self-heal DNS/host config once per distro per process. Fresh installs get this at extraction
-        // time, but an environment installed before this fix (e.g. a broken minimal ubuntu-base 26.04
-        // with no working /etc/resolv.conf) is repaired here so apt starts resolving without a reinstall.
-        if (networkingConfigured.add(distroId)) {
-            rootfsManager.ensureRootfsNetworking(rootfsPath)
+        // Self-heal DNS/host config and the system locale once per distro per process. Fresh installs
+        // get this at extraction time, but an environment installed before this fix (e.g. a broken
+        // minimal ubuntu-base 26.04 with no working /etc/resolv.conf) is repaired here so apt starts
+        // resolving without a reinstall.
+        if (rootfsConfigured.add(distroId)) {
+            rootfsManager.ensureRootfsConfig(rootfsPath)
         }
 
         // Foreign-arch environment: make sure the QEMU emulator is extracted before invoking proot.
@@ -1933,7 +1934,6 @@ class DistroService(
             "HOME" to (if (user == "root") "/root" else "/home/$user"),
             "USER" to user,
             "TERM" to "dumb",
-            "LANG" to "en_US.UTF-8",
             "TMPDIR" to "/tmp",
             "PATH" to (if (extraPath.isNotBlank()) "$extraPath:$basePath" else basePath),
         ) + instance?.let { GuestProcessTree.instanceEnv(owner!!, it) }.orEmpty()

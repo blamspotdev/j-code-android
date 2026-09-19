@@ -1779,9 +1779,9 @@ private fun formatBytes(n: Long): String = when {
     n <= 0 -> "0 B"
     n < 1024 -> "$n B"
     n < 1024 * 1024 -> "${n / 1024} kB"
-    n < 1024L * 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", n / 1048576.0)
+    n < 1024L * 1024 * 1024 -> String.format(java.util.Locale.ROOT, "%.1f MB", n / 1048576.0)
     // A storage quota is measured in tens of gigabytes; without this it reported "134379.8 MB".
-    else -> String.format(java.util.Locale.US, "%.1f GB", n / 1073741824.0)
+    else -> String.format(java.util.Locale.ROOT, "%.1f GB", n / 1073741824.0)
 }
 
 @Composable

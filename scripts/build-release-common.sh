@@ -302,7 +302,7 @@ create_release_keystore() {
     local pw; pw="$(head -c 18 /dev/urandom | base64 | tr -d '+/=' | cut -c1-21)aA1"
     "$keytool" -genkeypair -v -keystore "$JCODE_KEYSTORE_DEFAULT" -alias jcode \
         -keyalg RSA -keysize 4096 -validity 10000 \
-        -storepass "$pw" -keypass "$pw" -dname "CN=JCode, O=JCode, C=US" \
+        -storepass "$pw" -keypass "$pw" -dname "CN=JCode, O=Blamspot, C=PH" \
         || { warn "keytool failed to create the keystore."; return 1; }
     printf '%s' "$pw" > "$JCODE_KEYSTORE_PASS_FILE"
     chmod 600 "$JCODE_KEYSTORE_PASS_FILE" 2>/dev/null || true

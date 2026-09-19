@@ -32,4 +32,5 @@ dependencies {
     implementation(project(":core:config"))
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
+    testImplementation(kotlin("test"))
 }
