@@ -309,7 +309,7 @@ function New-ReleaseKeystore($KsPath, $PassFile) {
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $pw = ((([Convert]::ToBase64String($bytes)) -replace '[+/=]', '') + 'aA1').Substring(0, 24)
     & $keytool -genkeypair -v -keystore $KsPath -alias jcode -keyalg RSA -keysize 4096 -validity 10000 `
-        -storepass $pw -keypass $pw -dname 'CN=JCode, O=JCode, C=US'
+        -storepass $pw -keypass $pw -dname 'CN=JCode, O=Blamspot, C=PH'
     if ($LASTEXITCODE -ne 0) { Warn 'keytool failed to create the keystore.'; return $null }
     Set-Content -Path $PassFile -Value $pw -NoNewline
     Say  "Created release keystore: $KsPath"

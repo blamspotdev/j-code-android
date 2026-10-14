@@ -316,10 +316,11 @@ class TerminalSessionManager(
         val rootfsPath = rootfsManager.getRootfsPath(distroId)
         if (!rootfsManager.isDistroInstalled(distroId)) return null
 
-        // Ensure DNS/host config so `apt` works from the terminal. Minimal ubuntu-base images (26.04)
-        // ship no usable /etc/resolv.conf; this repairs such an install even if it was created before
-        // the fix (guarded writes → cheap no-op once configured). Fresh installs get it at extraction.
-        rootfsManager.ensureRootfsNetworking(rootfsPath)
+        // Ensure DNS/host config so `apt` works from the terminal, and the system locale. Minimal
+        // ubuntu-base images (26.04) ship no usable /etc/resolv.conf; this repairs such an install even
+        // if it was created before the fix (guarded writes → cheap no-op once configured). Fresh
+        // installs get it at extraction.
+        rootfsManager.ensureRootfsConfig(rootfsPath)
 
         // Suppress Ubuntu/Debian's /etc/bash.bashrc "sudo hint", which runs `$(groups)` (printing
         // "groups: cannot find name for group ID N" for the inherited Android gids) unless
@@ -439,7 +440,6 @@ class TerminalSessionManager(
             "COLORTERM" to "truecolor",
             "HOME" to home,
             "USER" to user,
-            "LANG" to "en_US.UTF-8",
             // Replace the inherited Android TMPDIR (an app-private host path that doesn't exist in the
             // guest) with the rootfs /tmp, so guest tools that use temp dirs work (.NET, gcc, etc.).
             "TMPDIR" to "/tmp",

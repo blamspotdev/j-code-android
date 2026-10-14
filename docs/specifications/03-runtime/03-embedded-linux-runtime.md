@@ -149,10 +149,19 @@ first non-option token, so the command path is passed directly and its own argum
 ### 4.2 Shell helpers
 
 `buildShellCommand(rootfsPath, shellCommand, binds, env, workdir, user, rootfsArch)` wraps a command
-for a given guest user, and `buildInteractiveShell(...)` builds a login shell for a terminal session.
-When `user != "root"` the command is routed through `su - <user> -c …`, which is why explicitly
-needed variables (such as `JCODE_PROGRESS_TOKEN`) must be re-exported inside the quoted command — a
-login shell drops the inherited environment.
+for a given guest user. It exports a default environment (`TERM`, `COLORTERM`, `HOME`, `USER`,
+`JCODE=1`, `LANG=C.UTF-8`, `TMPDIR=/tmp`, `PATH`) with the caller's `env` merged over it.
+
+When `user != "root"` the command is routed through `su -w <names> - <user> -c …`. A login shell
+starts from an empty environment, so every exported name is listed for `-w`
+(`--whitelist-environment`) to carry across — the terminal's variables, the process-tree tags
+`GuestProcessTree` finds a tree by, and the rest. `su` still sets `TERM`, `HOME`, `SHELL`, `USER`,
+`LOGNAME` and `PATH` itself and ignores them in `-w`, so a non-root command runs with the account's
+login `PATH`: a caller's `PATH` additions (`spawnStdioProcess`'s `extraPath`) apply to root only.
+
+A `su` that JCode does not build here carries nothing across — the setup terminal's nested
+`su - <user> -c …`, or the sudo shim — which is why `JCODE_PROGRESS_TOKEN` is re-exported inside
+that quoted command.
 
 ---
 
@@ -215,15 +224,24 @@ post-extraction repairs are:
 | Bootstrap pulled 500 MB+ of recommends | `--no-install-recommends` |
 | A single 15-minute chained apt command killed by Android's watchdog | Bootstrap split into 5 sequential steps, each with a 10-minute timeout |
 
-### 5.4 Networking self-heal
+### 5.4 Networking and locale self-heal
 
 `ensureRootfsNetworking(rootfsDir)` writes a usable `/etc/resolv.conf` and `/etc/hosts` when the
 existing ones are missing or empty. Minimal `ubuntu-base` images (notably 26.04) ship an empty
-`resolv.conf`, which leaves the guest with no DNS at all and makes `apt` fail confusingly.
+`resolv.conf`, which leaves the guest with no DNS at all and makes `apt` fail confusingly. The correct
+fix is this, **not** rewriting apt sources to `ports.ubuntu.com`.
 
-It is idempotent (`isUsableResolvConf` guards the write), so `TerminalSessionManager.createSession`
-calls it unconditionally — repairing installs created before the fix existed. The correct fix is
-this, **not** rewriting apt sources to `ports.ubuntu.com`.
+`ensureRootfsLocale(rootfsDir)` writes `LANG=C.UTF-8` to `/etc/default/locale` when that file is
+missing, empty, or a dangling link — the 24.04 image links it to an `/etc/locale.conf` that nothing
+creates. pam_env applies it on every `su` login, so it reaches the sudo shim and a `su` the
+user types as well as JCode's own commands. It is C.UTF-8 because that is the one locale a minimal
+image ships (in `libc-bin`): a named locale such as `en_US.UTF-8` needs the `locales` package, and
+naming one that is absent makes every tool fall back to ASCII `C`.
+
+Both are idempotent and leave configuration they find alone. `ensureRootfsConfig(rootfsDir)` runs the
+two together; extraction, `TerminalSessionManager.createSession` and `DistroService`'s command path
+(once per distro per process) call it, repairing installs created before either fix existed.
+`DistroService` also calls `ensureRootfsNetworking` on its own before apt operations.
 
 ### 5.5 Backup
 

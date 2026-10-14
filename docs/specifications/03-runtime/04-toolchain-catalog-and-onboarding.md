@@ -228,7 +228,7 @@ over a differently-signed JCode without an uninstall.
 
 ### 3.1 Every entry must put its binary on the fixed PATH
 
-Catalog scripts and the LSP launcher both run **non-interactively** (`su - jcode -c '…'`) with a fixed
+Catalog scripts and the LSP launcher both run **non-interactively** (`su -w … - jcode -c '…'`) with a fixed
 `PATH` of `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`. Anything that installs
 outside those directories is invisible to both `verifyCommand` and `runCommand`, and the failure looks
 like "installed but the server never starts".

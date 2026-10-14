@@ -266,7 +266,7 @@ class BackendService : Service() {
     /** GB past a thousand megabytes: "1.4 GB" reads at a glance where "1428 MB" has to be counted. */
     private fun formatMemory(kb: Long): String {
         val mb = kb / 1024.0
-        return if (mb >= 1024) String.format(java.util.Locale.US, "%.1f GB", mb / 1024) else "${mb.toInt()} MB"
+        return if (mb >= 1024) String.format(java.util.Locale.ROOT, "%.1f GB", mb / 1024) else "${mb.toInt()} MB"
     }
 
     companion object {

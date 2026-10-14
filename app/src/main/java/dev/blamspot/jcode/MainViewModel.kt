@@ -3516,7 +3516,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             value /= 1024
             unit++
         }
-        return String.format(java.util.Locale.US, if (value >= 100) "%.0f %s" else "%.1f %s", value, units[unit])
+        return String.format(java.util.Locale.ROOT, if (value >= 100) "%.0f %s" else "%.1f %s", value, units[unit])
     }
 
     fun createNewItem(request: NewItemRequest) {
@@ -3885,7 +3885,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             emitMessage("Exporting '$name'…")
-            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.ROOT).format(java.util.Date())
             runCatching { copyLocalTreeToDocumentTree(appContext, source, dest, "$name-$stamp") }
                 .onSuccess { emitMessage("Exported $it file(s) from '$name'.") }
                 .onFailure { emitMessage("Export failed: ${it.message ?: "unknown error"}") }

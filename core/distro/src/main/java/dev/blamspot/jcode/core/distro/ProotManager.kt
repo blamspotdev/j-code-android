@@ -18,6 +18,47 @@ class ProotManager(private val context: Context) {
         // compiled-in path, which was wrong for every build whose applicationId carries a suffix
         // (see native/proot/libandroid-shmem/README.md).
         private const val SUPPORT_LIBS_VERSION = 3
+
+        // What `su` sets for the target user itself: it keeps TERM through a login and derives the
+        // rest from the account, ignoring any of them named in --whitelist-environment.
+        private val SU_MANAGED_ENV = setOf("TERM", "HOME", "SHELL", "USER", "LOGNAME", "PATH")
+
+        /**
+         * The `/bin/sh -c` script [buildShellCommand] runs: export the guest environment, then run
+         * [shellCommand] as [user].
+         */
+        internal fun guestShellScript(shellCommand: String, env: Map<String, String>, user: String): String {
+            val defaultEnv = mapOf(
+                "TERM" to "xterm-256color",
+                "COLORTERM" to "truecolor",
+                "HOME" to (if (user == "root") "/root" else "/home/$user"),
+                "USER" to user,
+                "JCODE" to "1",
+                // The one locale a minimal rootfs ships (libc-bin). A named one such as en_US.UTF-8 needs
+                // the `locales` package; without it, every tool silently falls back to ASCII "C".
+                "LANG" to "C.UTF-8",
+                // Override the Android app's inherited TMPDIR (an app-private host path like
+                // /data/user/0/<pkg>/cache) which does not exist inside the guest — leaking it breaks
+                // any tool that creates temp files (e.g. .NET/MSBuild fails GetTempPath with ENOENT).
+                "TMPDIR" to "/tmp",
+                "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            )
+            val mergedEnv = defaultEnv + env
+            val envExports = mergedEnv.toSortedMap().entries.joinToString("; ") { (key, value) ->
+                "export $key=${shellQuote(value)}"
+            }
+            val execution = if (user == "root") {
+                "exec /bin/sh -c ${shellQuote(shellCommand)}"
+            } else {
+                // `su -` starts the user from an empty environment, so every variable above is named for
+                // -w to carry across; otherwise the user's processes get none of them.
+                val carried = mergedEnv.keys.filterNot { it in SU_MANAGED_ENV }.sorted().joinToString(",")
+                "exec su -w ${shellQuote(carried)} - ${shellQuote(user)} -c ${shellQuote(shellCommand)}"
+            }
+            return "$envExports; $execution"
+        }
+
+        private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
     }
 
     
@@ -436,7 +477,7 @@ class ProotManager(private val context: Context) {
     }
     
     /**
-     * Build a proot command for running a shell command as the jcode user.
+     * Build a proot command for running a shell command as [user].
      */
     fun buildShellCommand(
         rootfsPath: File,
@@ -446,70 +487,11 @@ class ProotManager(private val context: Context) {
         workdir: String = DEFAULT_DISTRO_WORKDIR,
         user: String = DEFAULT_DISTRO_USER,
         rootfsArch: Arch = Arch.ARM64,
-    ): List<String> {
-        val defaultEnv = if (user == "root") {
-            mapOf(
-                "TERM" to "xterm-256color",
-                "COLORTERM" to "truecolor",
-                "HOME" to "/root",
-                "USER" to "root",
-                "JCODE" to "1",
-                "LANG" to "en_US.UTF-8",
-                // Override the Android app's inherited TMPDIR (an app-private host path like
-                // /data/user/0/<pkg>/cache) which does not exist inside the guest — leaking it breaks
-                // any tool that creates temp files (e.g. .NET/MSBuild fails GetTempPath with ENOENT).
-                "TMPDIR" to "/tmp",
-                "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            )
-        } else {
-            mapOf(
-                "TERM" to "xterm-256color",
-                "COLORTERM" to "truecolor",
-                "HOME" to "/home/$user",
-                "USER" to user,
-                "JCODE" to "1",
-                "LANG" to "en_US.UTF-8",
-                "TMPDIR" to "/tmp",
-                "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            )
-        }
-        val mergedEnv = defaultEnv + env
-        val envExports = mergedEnv.toSortedMap().entries.joinToString("; ") { (key, value) ->
-            "export $key=${shellQuote(value)}"
-        }
-        val execution = if (user == "root") {
-            "exec /bin/sh -c ${shellQuote(shellCommand)}"
-        } else {
-            "exec su - ${shellQuote(user)} -c ${shellQuote(shellCommand)}"
-        }
-        return buildProotCommand(
-            rootfsPath = rootfsPath,
-            command = listOf("/bin/sh", "-c", "$envExports; $execution"),
-            binds = binds,
-            workdir = workdir,
-            rootfsArch = rootfsArch,
-        )
-    }
-    
-    /**
-     * Build a proot command for an interactive login shell.
-     */
-    fun buildInteractiveShell(
-        rootfsPath: File,
-        binds: List<DistroBind> = emptyList(),
-        env: Map<String, String> = emptyMap(),
-        workdir: String = DEFAULT_DISTRO_WORKDIR,
-        user: String = DEFAULT_DISTRO_USER,
-        rootfsArch: Arch = Arch.ARM64,
-    ): List<String> {
-        return buildProotCommand(
-            rootfsPath = rootfsPath,
-            command = if (user == "root") listOf("/bin/sh", "-l") else listOf("su", "-", user),
-            binds = binds,
-            workdir = workdir,
-            rootfsArch = rootfsArch,
-        )
-    }
-
-    private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
+    ): List<String> = buildProotCommand(
+        rootfsPath = rootfsPath,
+        command = listOf("/bin/sh", "-c", guestShellScript(shellCommand, env, user)),
+        binds = binds,
+        workdir = workdir,
+        rootfsArch = rootfsArch,
+    )
 }

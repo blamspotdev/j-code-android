@@ -255,9 +255,9 @@ internal fun ColorSampleDialog(
     val r = (argb ushr 16) and 0xFF
     val g = (argb ushr 8) and 0xFF
     val b = argb and 0xFF
-    val alpha = String.format(java.util.Locale.US, "%.2f", a / 255f).trimEnd('0').trimEnd('.')
+    val alpha = String.format(java.util.Locale.ROOT, "%.2f", a / 255f).trimEnd('0').trimEnd('.')
     val rows = listOf(
-        "HEX" to String.format(java.util.Locale.US, "#%02X%02X%02X", r, g, b),
+        "HEX" to String.format(java.util.Locale.ROOT, "#%02X%02X%02X", r, g, b),
         "RGB" to "rgb($r, $g, $b)",
         "RGBA" to "rgba($r, $g, $b, ${alpha.ifEmpty { "0" }})",
     )

@@ -287,11 +287,11 @@ class RootfsManager(
                     entry = tin.nextTarEntry
                 }
             }
-            // A freshly extracted minimal image has no working DNS/host config — wire it up so apt
-            // works. Only for an actual rootfs: this unpacker also reads the projects and extensions
+            // A freshly extracted minimal image has no working DNS/host config and no system locale —
+            // set both. Only for an actual rootfs: this unpacker also reads the projects and extensions
             // archives in a migration bundle, and writing /etc into one of those leaves a stray
             // `etc/resolv.conf` sitting in the user's projects folder.
-            if (isRootfs) ensureRootfsNetworking(targetDir)
+            if (isRootfs) ensureRootfsConfig(targetDir)
             android.util.Log.d(
                 "RootfsManager",
                 "extractRootfs: OK ($hardlinks hard links, $symlinkedLinks converted to symlinks)",
@@ -347,6 +347,33 @@ class RootfsManager(
             true
         } catch (e: Exception) {
             android.util.Log.e("RootfsManager", "ensureRootfsNetworking failed", e)
+            false
+        }
+    }
+
+    /** [ensureRootfsNetworking] and [ensureRootfsLocale]: the config every rootfs gets before use. */
+    fun ensureRootfsConfig(rootfsDir: File): Boolean =
+        ensureRootfsNetworking(rootfsDir) and ensureRootfsLocale(rootfsDir)
+
+    /**
+     * Give the rootfs a system locale: `LANG=C.UTF-8` in /etc/default/locale, which pam_env applies to
+     * every `su` login — terminals, language servers and the sudo shim all enter that way. C.UTF-8
+     * because it is the one locale a minimal image ships; a named one needs the `locales` package.
+     * Written only when the file is missing or empty, so a locale the user set (`update-locale`) stays.
+     * A dangling link is replaced, as with resolv.conf: the 24.04 image links the file to an
+     * /etc/locale.conf that nothing creates.
+     */
+    fun ensureRootfsLocale(rootfsDir: File): Boolean {
+        return try {
+            val locale = File(rootfsDir, "etc/default/locale")
+            if (isSymlink(locale) && !locale.exists()) locale.delete()
+            if (!isSymlink(locale) && locale.length() == 0L) {
+                locale.parentFile?.mkdirs()
+                locale.writeText("LANG=C.UTF-8\n")
+            }
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("RootfsManager", "ensureRootfsLocale failed", e)
             false
         }
     }
