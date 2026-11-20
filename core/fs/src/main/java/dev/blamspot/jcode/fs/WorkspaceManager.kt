@@ -120,10 +120,13 @@ class WorkspaceManager @Inject constructor(
                     )
                 }
 
+                // A SAF tree whose grant was revoked throws from the provider query. That is no reason
+                // to take the whole list down with it: the row stays, labelled a plain project.
                 ProjectKind.Saf -> RecentFolder(
                     uri = row.uri,
                     kind = row.kind,
-                    nodeType = nodeMeta(FsPath.Saf(Uri.parse(row.uri))).first,
+                    nodeType = runCatching { nodeMeta(FsPath.Saf(Uri.parse(row.uri))).first }
+                        .getOrDefault(WorkspaceNodeType.Project),
                 )
             }
         }
