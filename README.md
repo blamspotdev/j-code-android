@@ -58,10 +58,10 @@ LTS rootfs in app-private storage. No Termux dependency, no root.
 
 ## Build
 
-Requirements: **JDK 21**, the Android SDK (`compileSdk 36`), **NDK r27c**
-(`27.2.12479018`), and **CMake 3.28.3**. `minSdk`/`targetSdk` 33
-(Android 13+). The repository currently uses AGP 8.13.0, Kotlin 2.2.20, and the
-Gradle 8.14.3 wrapper.
+Requirements: **JDK 21**, the Android SDK (`compileSdk` 37.1), **NDK r30**
+(`30.0.16248370`), and **CMake 3.24+** (3.31.6 preferred). `minSdk`/`targetSdk` 33
+(Android 13+). The repository currently uses AGP 9.5.1 (Kotlin built in), Kotlin 2.4.21, and
+the Gradle 9.9.2 wrapper; Android Studio Rabbit 2 (2026.2.2) or newer syncs it.
 
 ```bash
 git clone https://github.com/blamspotdev/j-code-android.git

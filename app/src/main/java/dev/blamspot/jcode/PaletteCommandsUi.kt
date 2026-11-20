@@ -16,6 +16,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import dev.blamspot.jcode.design.rememberTextCopier
 import dev.blamspot.jcode.design.Radius
 import dev.blamspot.jcode.design.Space
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,9 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -250,7 +249,7 @@ internal fun ColorSampleDialog(
     onPickAgain: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberTextCopier()
     val a = (argb ushr 24) and 0xFF
     val r = (argb ushr 16) and 0xFF
     val g = (argb ushr 8) and 0xFF
@@ -287,7 +286,7 @@ internal fun ColorSampleDialog(
                             )
                             Text(text = value, fontFamily = FontFamily.Monospace)
                         }
-                        IconButton(onClick = { clipboard.setText(AnnotatedString(value)) }) {
+                        IconButton(onClick = { copyText(value) }) {
                             Icon(
                                 painter = jcIcon(JCodeIcon.Copy),
                                 contentDescription = "Copy $label",

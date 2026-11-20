@@ -1,12 +1,23 @@
 import java.io.ByteArrayOutputStream
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
 
 val cargoManifestPath = extra["cargoManifestPath"] as String
 val cargoPackageName = extra["cargoPackageName"] as String
 
-fun cargoAvailable(project: org.gradle.api.Project): Boolean {
+// Gradle 9 removed Project.exec; ExecOperations replaces it, and a script plugin can only reach a
+// service through an object Gradle instantiates and injects.
+interface ExecOperationsHolder {
+    @get:Inject
+    val execOperations: ExecOperations
+}
+
+val execOperations = objects.newInstance<ExecOperationsHolder>().execOperations
+
+fun cargoAvailable(): Boolean {
     return runCatching {
         val output = ByteArrayOutputStream()
-        project.exec {
+        execOperations.exec {
             commandLine("cargo", "--version")
             standardOutput = output
             errorOutput = output
@@ -20,13 +31,15 @@ fun registerCargoNdkBuildTask(taskName: String, buildMode: String) =
         group = "build"
         description = "Builds $buildMode cargo JNI libs for $cargoPackageName"
 
+        // Resolved now: Gradle 9 deprecates reaching the Project from a task while it runs.
+        val manifest = file(cargoManifestPath)
+        val outputDir = layout.buildDirectory.dir("generated/cargoJniLibs/$buildMode").get().asFile
+
         doLast {
-            val manifest = project.file(cargoManifestPath)
             val cargoHome = System.getenv("CARGO_HOME")
             val rustupHome = System.getenv("RUSTUP_HOME")
 
-            val outputDir = project.layout.buildDirectory.dir("generated/cargoJniLibs/$buildMode").get().asFile
-            if (!cargoAvailable(project)) {
+            if (!cargoAvailable()) {
                 // Anything left here is from a build made when cargo was still installed. The root
                 // build script has already decided this machine gets the stub, so a stale library
                 // would be a second one of the same name beside it.
@@ -38,7 +51,7 @@ fun registerCargoNdkBuildTask(taskName: String, buildMode: String) =
             // One target for every variant, matching the app's arm64-only packaging (the ABI
             // filter and the reason for it live in the root build.gradle.kts). Building a second
             // one would only hand the jniLibs merger a library no JCode APK can carry.
-            project.exec {
+            execOperations.exec {
                 workingDir = manifest.parentFile
                 environment("CARGO_HOME", cargoHome ?: "")
                 environment("RUSTUP_HOME", rustupHome ?: "")

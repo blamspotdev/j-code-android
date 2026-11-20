@@ -1,11 +1,9 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
 }
 
 android {
     namespace = "dev.blamspot.jcode.nativeffi.vt"
-    compileSdk = 36
 
     defaultConfig {
         minSdk = 33
@@ -16,7 +14,7 @@ android {
             cmake {
                 arguments(
                     "-DJCODE_NATIVE_MODULE=vt",
-                    "-DJCODE_JNI_OUTPUT_DIR=${project.buildDir}/intermediates/merged_native_libs",
+                    "-DJCODE_JNI_OUTPUT_DIR=${layout.buildDirectory.get().asFile}/intermediates/merged_native_libs",
                     "-DJCODE_VARIANT_DIR=debug",
                 )
                 cFlags += listOf("-std=c11", "-fvisibility=hidden")
@@ -36,7 +34,7 @@ android {
                 cmake {
                     arguments(
                         "-DJCODE_NATIVE_MODULE=vt",
-                        "-DJCODE_JNI_OUTPUT_DIR=${project.buildDir}/intermediates/merged_native_libs",
+                        "-DJCODE_JNI_OUTPUT_DIR=${layout.buildDirectory.get().asFile}/intermediates/merged_native_libs",
                         "-DJCODE_VARIANT_DIR=release",
                     )
                 }

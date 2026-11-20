@@ -1936,7 +1936,7 @@ class DistroService(
             "TERM" to "dumb",
             "TMPDIR" to "/tmp",
             "PATH" to (if (extraPath.isNotBlank()) "$extraPath:$basePath" else basePath),
-        ) + instance?.let { GuestProcessTree.instanceEnv(owner!!, it) }.orEmpty()
+        ) + instance?.let { GuestProcessTree.instanceEnv(owner, it) }.orEmpty()
         val prootArgs = prootManager.buildShellCommand(
             rootfsPath = rootfsPath,
             shellCommand = command,

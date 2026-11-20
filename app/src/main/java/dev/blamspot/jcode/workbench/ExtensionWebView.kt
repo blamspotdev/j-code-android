@@ -648,12 +648,7 @@ internal class VsixSession private constructor(
                     extension.id,
                     "ext → page[$handle] ${payload?.toString()?.take(200)}",
                 )
-                val json = JSONObject.quote(
-                    when (payload) {
-                        null, JSONObject.NULL -> "null"
-                        else -> payload.toString()
-                    },
-                )
+                val json = JSONObject.quote(if (payload == null || payload == JSONObject.NULL) "null" else payload.toString())
                 scope.launch { deliverToPage(handle, json) }
                 host.reply(params.optInt("__requestId"), null)
             }

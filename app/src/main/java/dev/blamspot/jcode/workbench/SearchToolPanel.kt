@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,6 +56,7 @@ import dev.blamspot.jcode.design.StrokeWidth
 import dev.blamspot.jcode.feature.editor.pane.EditorTab
 import dev.blamspot.jcode.fs.FsPath
 import dev.blamspot.jcode.fs.Project
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.io.File
@@ -117,6 +117,7 @@ private fun SearchScopeSelector(
  * Three scopes: file content across the project (default), file names only, and the current
  * document — the active editor tab's live buffer, so unsaved edits are searched too.
  */
+@OptIn(FlowPreview::class)
 @Composable
 internal fun SearchToolPanel(
     project: Project?,

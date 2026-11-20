@@ -41,7 +41,7 @@ private val nativeModuleIds = mapOf(
 )
 ```
 
-For each match the root script sets `compileSdk = 36`, `minSdk = 33`, `ndkVersion = 27.2.12479018`,
+For each match the root script sets `minSdk = 33` (it gives every module `compileSdk` 37.1), `ndkVersion = 30.0.16248370` (`jcodeNdkVersion`, which the app module gets too),
 ABI filters (`arm64-v8a` alone, on every variant), points
 `externalNativeBuild.cmake.path` at `native/CMakeLists.txt`, and passes
 `-DANDROID_STL=c++_static -DJCODE_NATIVE_MODULE=… -DJCODE_JNI_OUTPUT_DIR=… -DJCODE_VARIANT_DIR=…`.

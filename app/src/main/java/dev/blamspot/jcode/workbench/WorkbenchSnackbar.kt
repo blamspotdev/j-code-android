@@ -12,7 +12,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
@@ -41,21 +40,13 @@ fun WorkbenchSnackbarHost(hostState: SnackbarHostState, modifier: Modifier = Mod
         // Keyed on the snackbar: the dismiss state has to start over for each one, or the box stays
         // swiped-away and the next message arrives already off-screen.
         key(data) {
-            val dismissState = rememberSwipeToDismissBoxState(
-                confirmValueChange = { value ->
-                    if (value == SwipeToDismissBoxValue.Settled) {
-                        false
-                    } else {
-                        data.dismiss()
-                        true
-                    }
-                },
-            )
+            val dismissState = rememberSwipeToDismissBoxState()
             SwipeToDismissBox(
                 state = dismissState,
                 // Nothing is revealed behind it: the snackbar is the whole surface, and a reveal
                 // colour under a floating card would read as a second, half-drawn card.
                 backgroundContent = {},
+                onDismiss = { data.dismiss() },
             ) {
                 SnackbarCard(data)
             }

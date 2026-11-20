@@ -676,7 +676,6 @@ fun JCodeApp(
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }
-        Unit
     }
     val appUpdateSetting = remember(updateInfo, updateChecking, updateInstallState) {
         AppUpdateSetting(
@@ -3995,8 +3994,6 @@ private fun JCodeShell(
                                             )
                                         }
                                     }
-                                } else {
-                                    Unit
                                 }
                             }
                         },

@@ -47,8 +47,8 @@ class IconPackLayoutTest {
                 "files-icons/dark/index.yaml",
             ),
         )
-        assertEquals(listOf("filled", "outlined"), sets.uiIndexes.map { it.parentFile.name }.sorted())
-        assertEquals(listOf("dark", "light"), sets.filesIndexes.map { it.parentFile.name }.sorted())
+        assertEquals(listOf("filled", "outlined"), sets.uiIndexes.map { it.parentFile!!.name }.sorted())
+        assertEquals(listOf("dark", "light"), sets.filesIndexes.map { it.parentFile!!.name }.sorted())
     }
 
     @Test
@@ -57,13 +57,13 @@ class IconPackLayoutTest {
         // art, not a second variant.
         val sets = resolve(pack("ui-icons/index.yaml", "ui-icons/glyphs/index.yaml"))
         assertEquals(1, sets.uiIndexes.size)
-        assertEquals("ui-icons", sets.uiIndexes.single().parentFile.name)
+        assertEquals("ui-icons", sets.uiIndexes.single().parentFile!!.name)
     }
 
     @Test
     fun `variants are ordered by name, not by the filesystem`() {
         val sets = resolve(pack("ui-icons/zeta/index.yaml", "ui-icons/alpha/index.yaml", "ui-icons/mid/index.yaml"))
-        assertEquals(listOf("alpha", "mid", "zeta"), sets.uiIndexes.map { it.parentFile.name })
+        assertEquals(listOf("alpha", "mid", "zeta"), sets.uiIndexes.map { it.parentFile!!.name })
     }
 
     @Test
@@ -108,7 +108,7 @@ class IconPackLayoutTest {
     fun `a declared directory expands to every variant inside it`() {
         val dir = pack("art/chrome/outlined/index.yaml", "art/chrome/filled/index.yaml")
         val sets = resolve(dir, ui = listOf("art/chrome"))
-        assertEquals(listOf("filled", "outlined"), sets.uiIndexes.map { it.parentFile.name }.sorted())
+        assertEquals(listOf("filled", "outlined"), sets.uiIndexes.map { it.parentFile!!.name }.sorted())
     }
 
     @Test

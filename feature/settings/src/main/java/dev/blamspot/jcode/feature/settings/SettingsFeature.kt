@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
@@ -35,7 +34,10 @@ import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.SecondaryScrollableTabRow
+import androidx.compose.material3.TabRowDefaults
+import dev.blamspot.jcode.design.rememberTextCopier
+import dev.blamspot.jcode.design.ValueTextField
 import dev.blamspot.jcode.design.AlertDialog
 import dev.blamspot.jcode.design.CompactFilledButton
 import dev.blamspot.jcode.design.CompactOutlinedButton
@@ -64,8 +66,6 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -273,14 +273,15 @@ object SettingsFeature {
                 .padding(start = Space.md, end = Space.md, top = Space.xs, bottom = Space.md),
             verticalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
-            // Material underline tabs, left-packed. ScrollableTabRow's own divider only spans the
+            // Material underline tabs, left-packed. SecondaryScrollableTabRow's own divider only spans the
             // tab content, so it is suppressed and a full-width one is drawn behind the row.
             Box(modifier = Modifier.fillMaxWidth()) {
                 HorizontalDivider(modifier = Modifier.align(Alignment.BottomStart))
-                ScrollableTabRow(
+                SecondaryScrollableTabRow(
                     selectedTabIndex = safeTab,
                     edgePadding = 0.dp,
                     containerColor = Color.Transparent,
+                    contentColor = TabRowDefaults.primaryContentColor,
                     divider = {},
                 ) {
                     tabScopes.forEachIndexed { index, scope ->
@@ -1030,7 +1031,7 @@ object SettingsFeature {
                     "background max_phantom_processes device_config adb activity manager trimming long session " +
                     "claude agent build gradle npm disappears exits by itself",
             ) {
-                val clipboard = LocalClipboardManager.current
+                val copyText = rememberTextCopier()
                 var processCount by remember { mutableStateOf<Int?>(null) }
                 // Only polls while this card is actually on screen (the group is collapsed by default).
                 LaunchedEffect(Unit) {
@@ -1062,7 +1063,7 @@ object SettingsFeature {
                 )
                 CompactOutlinedButton(
                     text = "Copy commands",
-                    onClick = { clipboard.setText(AnnotatedString(AppProcesses.RAISE_LIMIT_COMMANDS)) },
+                    onClick = { copyText(AppProcesses.RAISE_LIMIT_COMMANDS) },
                 )
             }
 
@@ -1731,7 +1732,7 @@ private fun SettingsSearchField(query: String, onQueryChange: (String) -> Unit) 
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                BasicTextField(
+                ValueTextField(
                     value = query,
                     onValueChange = onQueryChange,
                     singleLine = true,
@@ -2082,7 +2083,7 @@ private fun formatLogSize(bytes: Long): String = when {
  */
 @Composable
 private fun DiagnosticLogDialog(lines: List<String>, onDismiss: () -> Unit) {
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberTextCopier()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Recent diagnostics") },
@@ -2115,7 +2116,7 @@ private fun DiagnosticLogDialog(lines: List<String>, onDismiss: () -> Unit) {
             CompactOutlinedButton(
                 text = "Copy",
                 onClick = {
-                    clipboard.setText(AnnotatedString(buildString { lines.forEach { appendLine(it) } }))
+                    copyText(buildString { lines.forEach { appendLine(it) } })
                 },
                 enabled = lines.isNotEmpty(),
             )

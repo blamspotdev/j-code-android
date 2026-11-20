@@ -134,7 +134,7 @@ object FsModule {
         context,
         WorkspaceDatabase::class.java,
         "jcode-workspaces.db",
-    ).fallbackToDestructiveMigration().build()
+    ).fallbackToDestructiveMigration(dropAllTables = false).build()
 
     @Provides
     fun provideWorkspaceDao(database: WorkspaceDatabase): WorkspaceDao = database.workspaceDao()

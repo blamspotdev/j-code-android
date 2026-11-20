@@ -1,17 +1,22 @@
 import com.android.build.api.dsl.ApplicationExtension
+import com.android.build.api.dsl.CommonExtension
 import com.android.build.api.dsl.LibraryExtension
 import org.gradle.api.JavaVersion
+import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.api.tasks.compile.JavaCompile
+import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.withType
-import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import java.io.File
 
+// Kotlin is built into AGP 9, so no module applies org.jetbrains.kotlin.android. The Kotlin version
+// is the Compose compiler plugin's: it brings the Kotlin Gradle plugin at that version onto this
+// classpath, which outranks the older one AGP depends on.
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.android.library) apply false
-    alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.kotlin.compose) apply false
+    alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.hilt) apply false
     alias(libs.plugins.ksp) apply false
 }
@@ -22,7 +27,11 @@ tasks.register("detekt") {
 }
 
 private val duplicateManifestResource = "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
-private val desiredCmakeVersion = "3.28.3"
+// One NDK for the app and every native module. The release scripts and release.yml install it by
+// this exact version, so a change here goes there too.
+private val jcodeNdkVersion = "30.0.16248370"
+// The newest 3.x the SDK publishes, so this fallback is one sdkmanager can actually install.
+private val desiredCmakeVersion = "3.31.6"
 // native/CMakeLists.txt uses $<LINK_LIBRARY:WHOLE_ARCHIVE,…> (CMake 3.24+), so anything older
 // cannot configure it — 3.22.1, the version the SDK installs by default, is below the floor.
 // Numeric ordering, not lexical — "3.9" sorts after "3.28" as a string. Prefer 3.x over 4.x only
@@ -80,8 +89,29 @@ subprojects {
         options.release.set(17)
     }
 
+    // Java 21 for every module, provisioned by Gradle (foojay) when the JDK running the build is
+    // older. Kotlin compilation follows the Java toolchain, and its jvmTarget follows
+    // compileOptions.targetCompatibility.
+    //
+    // One compile SDK for every module, too: Compose 1.13 only compiles against API 37.1. It is the
+    // SDK compiled against, not targeted — targetSdk, which is what changes behaviour at runtime,
+    // stays where app/build.gradle.kts sets it.
+    listOf("com.android.application", "com.android.library").forEach { androidPlugin ->
+        plugins.withId(androidPlugin) {
+            extensions.configure<JavaPluginExtension> {
+                toolchain.languageVersion.set(JavaLanguageVersion.of(21))
+            }
+            extensions.configure<CommonExtension> {
+                compileSdk = 37
+                compileSdkMinor = 1
+            }
+        }
+    }
+
     plugins.withId("com.android.application") {
         extensions.configure<ApplicationExtension> {
+            ndkVersion = jcodeNdkVersion
+
             compileOptions {
                 sourceCompatibility = JavaVersion.VERSION_21
                 targetCompatibility = JavaVersion.VERSION_21
@@ -107,8 +137,6 @@ subprojects {
         extensions.configure<LibraryExtension> {
             nativeModuleIds[path]?.let { nativeModuleId ->
                 val jniOutputRoot = layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath.replace("\\", "/")
-
-                compileSdk = 36
 
                 defaultConfig {
                     minSdk = 33
@@ -186,11 +214,11 @@ subprojects {
                 // merger a second library of the same name as cargo's.
                 if (!cargoWillBuild) {
                     listOf("debug", "release").forEach { variant ->
-                        sourceSets.getByName(variant).jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs/$variant"))
+                        sourceSets.getByName(variant).jniLibs.directories += layout.buildDirectory.dir("generated/jniLibs/$variant").get().asFile.path
                     }
                 }
 
-                ndkVersion = "27.2.12479018"
+                ndkVersion = jcodeNdkVersion
             }
 
             compileOptions {
@@ -208,12 +236,6 @@ subprojects {
                 // Crashes lintVitalRelease: androidx.lifecycle detector vs Kotlin 2.1 analysis API.
                 disable += "NullSafeMutableLiveData"
             }
-        }
-    }
-
-    plugins.withId("org.jetbrains.kotlin.android") {
-        extensions.configure<KotlinAndroidProjectExtension> {
-            jvmToolchain(21)
         }
     }
 }

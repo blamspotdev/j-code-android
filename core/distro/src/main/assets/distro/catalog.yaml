@@ -51,7 +51,7 @@ entries:
       command -v curl >/dev/null 2>&1 || jcode_apt 0 10 "Installing download prerequisites" curl ca-certificates
       if [ ! -s "$NVM_DIR/nvm.sh" ]; then
         jcode_progress 15 "Installing nvm"
-        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.41.0/install.sh | bash
       fi
       . "$NVM_DIR/nvm.sh"
       jcode_progress 30 "Downloading Node.js ${JCODE_VERSION:-LTS}"

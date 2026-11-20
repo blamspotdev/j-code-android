@@ -1,13 +1,11 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
 }
 
 android {
     namespace = "dev.blamspot.jcode.core.distro"
-    compileSdk = 36
 
     defaultConfig {
         minSdk = 33
@@ -18,9 +16,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_21
     }
 
-    kotlinOptions {
-        jvmTarget = "21"
-    }
 }
 
 dependencies {
@@ -32,5 +27,5 @@ dependencies {
     implementation(project(":core:config"))
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
-    testImplementation(kotlin("test"))
+    testImplementation(libs.kotlin.test.junit)
 }

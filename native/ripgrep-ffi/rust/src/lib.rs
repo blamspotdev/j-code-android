@@ -1,4 +1,3 @@
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
 use grep::matcher::Matcher;
@@ -7,9 +6,10 @@ use grep::searcher::sinks::UTF8;
 use grep::searcher::{BinaryDetection, SearcherBuilder};
 use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
-use jni::objects::{JClass, JObject, JObjectArray, JString, JValue};
+use jni::errors::LogErrorAndDefault;
+use jni::objects::{JClass, JObject, JObjectArray, JString};
 use jni::sys::jint;
-use jni::JNIEnv;
+use jni::{jni_sig, jni_str, Env, EnvUnowned, JValue};
 
 // Must mirror NativeSearch.kt (dev.blamspot.jcode.core.search).
 const FLAG_REGEX: jint = 1;
@@ -22,69 +22,60 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// Distinguishes the real cargo-built library from the CMake stub (which lacks this symbol):
 /// the Kotlin side probes it after loadLibrary and falls back to the in-process search if absent.
 #[no_mangle]
-pub extern "system" fn Java_dev_blamspot_jcode_core_search_NativeSearch_nativeProbe(
-    _env: JNIEnv,
-    _class: JClass,
+pub extern "system" fn Java_dev_blamspot_jcode_core_search_NativeSearch_nativeProbe<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
 ) -> jint {
     1
 }
 
 /// Walks `root` (gitignore-aware) and streams every match to `sink.onMatch(...)`.
-/// Stops early when the sink returns false or `max_results` is reached. Returns matches emitted.
+/// Stops early when the sink returns false or `max_results` is reached. Returns matches emitted;
+/// a JNI error or a panic (which `with_env` catches) is logged and answers 0.
 #[no_mangle]
-pub extern "system" fn Java_dev_blamspot_jcode_core_search_NativeSearch_nativeSearch(
-    mut env: JNIEnv,
-    _class: JClass,
-    root: JString,
-    query: JString,
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_dev_blamspot_jcode_core_search_NativeSearch_nativeSearch<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    root: JString<'local>,
+    query: JString<'local>,
     flags: jint,
-    include_globs: JObjectArray,
-    exclude_globs: JObjectArray,
+    include_globs: JObjectArray<'local, JString<'local>>,
+    exclude_globs: JObjectArray<'local, JString<'local>>,
     max_results: jint,
-    sink: JObject,
+    sink: JObject<'local>,
 ) -> jint {
-    catch_unwind(AssertUnwindSafe(|| {
-        search_impl(
-            &mut env,
-            root,
-            query,
-            flags,
-            include_globs,
-            exclude_globs,
-            max_results,
-            sink,
-        )
-        .unwrap_or(0)
-    }))
-    .unwrap_or(0)
+    env.with_env(|env| {
+        search_impl(env, &root, &query, flags, &include_globs, &exclude_globs, max_results, &sink)
+    })
+    .resolve::<LogErrorAndDefault>()
 }
 
-fn get_string_array(env: &mut JNIEnv, array: &JObjectArray) -> jni::errors::Result<Vec<String>> {
-    let len = env.get_array_length(array)?;
-    let mut out = Vec::with_capacity(len as usize);
+fn get_string_array(env: &mut Env, array: &JObjectArray<JString>) -> jni::errors::Result<Vec<String>> {
+    let len = array.len(env)?;
+    let mut out = Vec::with_capacity(len);
     for i in 0..len {
-        let obj = env.get_object_array_element(array, i)?;
-        let s: String = env.get_string(&JString::from(obj))?.into();
-        out.push(s);
+        let element = array.get_element(env, i)?;
+        out.push(element.try_to_string(env)?);
     }
     Ok(out)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn search_impl(
-    env: &mut JNIEnv,
-    root: JString,
-    query: JString,
+    env: &mut Env,
+    root: &JString,
+    query: &JString,
     flags: jint,
-    include_globs: JObjectArray,
-    exclude_globs: JObjectArray,
+    include_globs: &JObjectArray<JString>,
+    exclude_globs: &JObjectArray<JString>,
     max_results: jint,
-    sink: JObject,
+    sink: &JObject,
 ) -> jni::errors::Result<jint> {
-    let root: String = env.get_string(&root)?.into();
-    let query: String = env.get_string(&query)?.into();
-    let includes = get_string_array(env, &include_globs)?;
-    let excludes = get_string_array(env, &exclude_globs)?;
+    let root: String = root.try_to_string(env)?;
+    let query: String = query.try_to_string(env)?;
+    let includes = get_string_array(env, include_globs)?;
+    let excludes = get_string_array(env, exclude_globs)?;
 
     let pattern = if flags & FLAG_REGEX != 0 {
         query
@@ -165,7 +156,7 @@ fn search_impl(
                         // UTF-16 code-unit columns, to match what Kotlin string indexing expects.
                         let col_start = line[..m.start()].encode_utf16().count() as jint;
                         let col_end = line[..m.end()].encode_utf16().count() as jint;
-                        match call_on_match(env, &sink, &rel, line_number as jint - 1, col_start, col_end, line) {
+                        match call_on_match(env, sink, &rel, line_number as jint - 1, col_start, col_end, line) {
                             Ok(true) => {
                                 emitted += 1;
                                 true
@@ -197,7 +188,7 @@ fn search_impl(
 }
 
 fn call_on_match(
-    env: &mut JNIEnv,
+    env: &mut Env,
     sink: &JObject,
     file_path: &str,
     line_number: jint,
@@ -209,8 +200,8 @@ fn call_on_match(
     let jline = env.new_string(line_text)?;
     let result = env.call_method(
         sink,
-        "onMatch",
-        "(Ljava/lang/String;IIILjava/lang/String;)Z",
+        jni_str!("onMatch"),
+        jni_sig!("(Ljava/lang/String;IIILjava/lang/String;)Z"),
         &[
             JValue::Object(&jpath),
             JValue::Int(line_number),
@@ -219,8 +210,9 @@ fn call_on_match(
             JValue::Object(&jline),
         ],
     );
-    env.delete_local_ref(jpath)?;
-    env.delete_local_ref(jline)?;
+    // One pair per match, over a whole tree: freed now rather than piling up until the call returns.
+    env.delete_local_ref(jpath);
+    env.delete_local_ref(jline);
     result?.z()
 }
 

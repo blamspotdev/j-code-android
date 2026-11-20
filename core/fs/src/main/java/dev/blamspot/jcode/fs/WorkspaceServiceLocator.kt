@@ -34,7 +34,7 @@ object WorkspaceServiceLocator {
             context,
             WorkspaceDatabase::class.java,
             "jcode-workspaces.db",
-        ).fallbackToDestructiveMigration().build()
+        ).fallbackToDestructiveMigration(dropAllTables = false).build()
 
         val dataStore = PreferenceDataStoreFactory.create {
             context.preferencesDataStoreFile("fs-preferences.preferences_pb")

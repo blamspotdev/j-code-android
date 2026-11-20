@@ -7,7 +7,7 @@ import android.content.res.Configuration.KEYBOARD_NOKEYS
 import android.hardware.input.InputManager
 import android.view.InputDevice
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.State
@@ -56,7 +56,7 @@ fun rememberJCodeWindowInfo(): State<JCodeWindowInfo> {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val configuration = LocalConfiguration.current
-    val adaptiveInfo = currentWindowAdaptiveInfo(supportLargeAndXLargeWidth = true)
+    val adaptiveInfo = currentWindowAdaptiveInfoV2()
     val lifecycleOwner = LocalLifecycleOwner.current
     val hasConfigurationKeyboard = configuration.keyboard != KEYBOARD_NOKEYS
     val inputManager = remember(context) { context.getSystemService(InputManager::class.java) }

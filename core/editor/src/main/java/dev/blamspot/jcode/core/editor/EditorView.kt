@@ -1437,6 +1437,10 @@ class EditorView @JvmOverloads constructor(
 
     /** Raise the soft keyboard for this editor (call after the view has focus). */
     fun showKeyboard() {
+        // Implicit on purpose: the system may decline an implicit request (a hardware keyboard is
+        // attached, or the user just dismissed the IME), and the editor relies on that. API 37
+        // deprecates the flag; an explicit show in its place would override those refusals.
+        @Suppress("DEPRECATION")
         imm().showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
     }
 

@@ -84,20 +84,20 @@ Bundled into the APK (`classes.dex` / merged resources). Unless noted, each is
 - Jetpack Compose — UI, UI-Graphics, UI-Tooling-Preview, Foundation,
   Material 3, Material 3 Adaptive (+ adaptive-layout), Material Icons Extended —
   https://developer.android.com/jetpack/compose
-- Dagger / Hilt 2.57.1 — https://github.com/google/dagger
-- Kotlin standard library 2.2.20, kotlinx.coroutines 1.10.1,
-  kotlinx.serialization 1.8.0 — https://github.com/JetBrains/kotlin,
+- Dagger / Hilt 2.60.1 — https://github.com/google/dagger
+- Kotlin standard library 2.4.21, kotlinx.coroutines 1.11.0,
+  kotlinx.serialization 1.13.0 — https://github.com/JetBrains/kotlin,
   https://github.com/Kotlin/kotlinx.coroutines,
   https://github.com/Kotlin/kotlinx.serialization
-- SnakeYAML Engine 2.9 — https://bitbucket.org/snakeyaml/snakeyaml-engine
-- Apache Commons Compress 1.27.1 — https://commons.apache.org/proper/commons-compress/
+- SnakeYAML Engine 3.2 — https://bitbucket.org/snakeyaml/snakeyaml-engine
+- Apache Commons Compress 1.28.0 — https://commons.apache.org/proper/commons-compress/
 
 ### Other permissive / weak-copyleft
 
 | Component | Version | License | Notes |
 |---|---|---|---|
-| Bouncy Castle (`bcprov-jdk18on`, `bcpkix-jdk18on`) | 1.80 | Bouncy Castle (MIT-style) | https://www.bouncycastle.org/ |
-| XZ for Java (`org.tukaani:xz`) | 1.10 | 0BSD / public domain | https://tukaani.org/xz/java.html |
+| Bouncy Castle (`bcprov-jdk18on`) | 1.87 | Bouncy Castle (MIT-style) | https://www.bouncycastle.org/ |
+| XZ for Java (`org.tukaani:xz`) | 1.12 | 0BSD / public domain | https://tukaani.org/xz/java.html |
 
 ---
 

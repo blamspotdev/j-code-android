@@ -2,10 +2,10 @@
 # Expects: OS_NAME, SDK_DEFAULT, JDK_HINT, JDK_INSTALL_CMD, GIT_HINT, GIT_INSTALL_CMD,
 #          RUST_HINT, RUST_INSTALL_CMD
 
-NDK_VERSION="27.2.12479018"
-PLATFORM_PKG="platforms;android-36"
-BUILD_TOOLS_PKG="build-tools;34.0.0"
-CMAKE_PKG="cmake;3.22.1"
+NDK_VERSION="30.0.16248370"
+PLATFORM_PKG="platforms;android-37.1"
+BUILD_TOOLS_PKG="build-tools;36.0.0"
+CMAKE_PKG="cmake;3.31.6"
 
 ASSUME_YES=0
 VARIANT="${JCODE_VARIANT:-}"
@@ -144,12 +144,12 @@ sdk_component() {
 }
 
 sdk_component "$SDK_ROOT/ndk/$NDK_VERSION" "ndk;$NDK_VERSION" "NDK $NDK_VERSION"
-sdk_component "$SDK_ROOT/platforms/android-36" "$PLATFORM_PKG" "Android platform 36"
+sdk_component "$SDK_ROOT/platforms/android-37.1" "$PLATFORM_PKG" "Android platform 37.1"
 if ! ls "$SDK_ROOT/cmake" >/dev/null 2>&1 || [ -z "$(ls "$SDK_ROOT/cmake" 2>/dev/null)" ]; then
-    sdk_component "$SDK_ROOT/cmake/3.22.1" "$CMAKE_PKG" "SDK CMake"
+    sdk_component "$SDK_ROOT/cmake/3.31.6" "$CMAKE_PKG" "SDK CMake"
 fi
 if ! ls "$SDK_ROOT/build-tools" >/dev/null 2>&1 || [ -z "$(ls "$SDK_ROOT/build-tools" 2>/dev/null)" ]; then
-    sdk_component "$SDK_ROOT/build-tools/34.0.0" "$BUILD_TOOLS_PKG" "Android build-tools"
+    sdk_component "$SDK_ROOT/build-tools/36.0.0" "$BUILD_TOOLS_PKG" "Android build-tools"
 fi
 
 CARGO_TASKS=""

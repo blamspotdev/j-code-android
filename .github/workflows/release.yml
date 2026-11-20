@@ -53,7 +53,7 @@ permissions:
   actions: write
 
 env:
-  NDK_VERSION: '27.2.12479018'
+  NDK_VERSION: '30.0.16248370'
 
 jobs:
   # A job of its own, ahead of the one that matters, so somebody without the rights is told so in
@@ -220,17 +220,16 @@ jobs:
         run: |
           set -eu
           sdkmanager --install \
-            "platforms;android-36" \
-            "build-tools;34.0.0" \
+            "platforms;android-37.1" \
+            "build-tools;36.0.0" \
             "ndk;${NDK_VERSION}"
 
           # CMake is deliberately NOT installed here. `native/CMakeLists.txt` uses
           # `$<LINK_LIBRARY:WHOLE_ARCHIVE,…>`, so the resolver in the root build.gradle.kts discards
           # everything below 3.24 — `cmake;3.22.1`, the version the SDK installs by default,
           # included. Asking for it would add a download the build then refuses to use. The runner
-          # image already ships a usable one; this only checks that it does, because the resolver's
-          # fallback names a version the SDK does not publish and the failure would surface much
-          # later as something else entirely.
+          # image already ships a usable one; this only checks that it does, because without one the
+          # failure would surface much later, at CMake configure, as something else entirely.
           [ -n "${ANDROID_HOME:-}" ] || { echo "::error::ANDROID_HOME is unset"; exit 1; }
           usable="$(ls "$ANDROID_HOME/cmake" 2>/dev/null | awk -F. '$1 * 100000 + $2 >= 300024' | tail -1)"
           [ -n "$usable" ] || {
