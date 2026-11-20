@@ -14,11 +14,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -43,6 +46,13 @@ class WorkspaceManager @Inject constructor(
     @Volatile
     private var defaultWorkspaceId: Long? = null
 
+    /** Derived (nodeType, templateId) per folder location. The workspace and recents flows re-derive
+     *  node types on every emission; caching keeps the (flaky, IPC-bound) SAF `.jcode` read from
+     *  running each time, so a folder's type stays stable instead of flickering. Invalidated whenever
+     *  we write it. Declared ahead of those flows: they start collecting while this class is still
+     *  being constructed. */
+    private val nodeMetaCache = java.util.concurrent.ConcurrentHashMap<String, Pair<WorkspaceNodeType, String?>>()
+
     /** Navigation trail from the Default Workspace down to the currently-open container. */
     private val _breadcrumb = MutableStateFlow<List<WorkspaceCrumb>>(emptyList())
     val breadcrumb: StateFlow<List<WorkspaceCrumb>> = _breadcrumb.asStateFlow()
@@ -60,9 +70,69 @@ class WorkspaceManager @Inject constructor(
     val rememberedSafTreeUris: StateFlow<Set<Uri>> = safPermissionStore.rememberedTrees
         .stateIn(scope, SharingStarted.Eagerly, emptySet())
 
-    /** Recently opened folders (projects/workspaces), most-recent first, pinned on top. */
-    val recents: StateFlow<List<RecentEntity>> = workspaceDao.observeRecents(12)
+    /** Bumped by [recheckRecents]. A folder deleted outside the app changes nothing in the database,
+     *  so without a nudge the Recent list would go on offering it. */
+    private val recentsRecheck = MutableStateFlow(0)
+
+    /**
+     * Recently opened folders (projects/workspaces), most-recent first, pinned on top, each resolved
+     * to what it is. A Local row whose folder is gone is deleted as it is found, so it neither shows
+     * nor holds one of the twelve places.
+     */
+    val recents: StateFlow<List<RecentFolder>> = combine(workspaceDao.observeRecents(12), recentsRecheck) { rows, _ -> rows }
+        .mapLatest(::resolveRecents)
         .stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    /** Re-check the Recent rows against the disk; see [recentsRecheck]. */
+    fun recheckRecents() {
+        recentsRecheck.update { it + 1 }
+    }
+
+    suspend fun removeRecent(uri: String) = withContext(Dispatchers.IO) {
+        workspaceDao.deleteRecent(uri)
+    }
+
+    /** Record [uri] as opened now, which moves it to the top of the Recent list. */
+    suspend fun touchRecent(uri: String, kind: ProjectKind) = withContext(Dispatchers.IO) {
+        workspaceDao.upsertRecent(
+            RecentEntity(uri = uri, kind = kind, lastOpened = System.currentTimeMillis(), pinned = false),
+        )
+    }
+
+    private suspend fun resolveRecents(rows: List<RecentEntity>): List<RecentFolder> {
+        val userWorkspaceNames = workspaceDao.getAllWorkspaces()
+            .filter { it.id != defaultWorkspaceId }
+            .associate { it.rootPath to it.name }
+        return rows.mapNotNull { row ->
+            when (row.kind) {
+                ProjectKind.Local -> {
+                    val dir = File(row.uri)
+                    if (isFolderGone(dir)) {
+                        workspaceDao.deleteRecent(row.uri)
+                        return@mapNotNull null
+                    }
+                    val nodeType = nodeMeta(FsPath.Local(dir)).first
+                    RecentFolder(
+                        uri = row.uri,
+                        kind = row.kind,
+                        nodeType = nodeType,
+                        workspaceName = dir.parent?.let(userWorkspaceNames::get).takeIf { nodeType == WorkspaceNodeType.Project },
+                    )
+                }
+
+                ProjectKind.Saf -> RecentFolder(
+                    uri = row.uri,
+                    kind = row.kind,
+                    nodeType = nodeMeta(FsPath.Saf(Uri.parse(row.uri))).first,
+                )
+            }
+        }
+    }
+
+    /** Id of the project registered at [dir] in [workspaceId], or null if there is none. */
+    suspend fun projectIdAt(workspaceId: Long, dir: File): Long? = withContext(Dispatchers.IO) {
+        workspaceDao.getProjectByLocation(workspaceId, dir.absolutePath)?.id
+    }
 
     init {
         scope.launch {
@@ -362,6 +432,8 @@ class WorkspaceManager @Inject constructor(
 
         openWorkspace(workspaceId)
         pushCrumb(workspaceId, displayName)
+        // However it was entered (Open Folder, the roster, Recent), a workspace is now a recent one.
+        touchRecent(rootPath, ProjectKind.Local)
         workspaceId
     }
 
@@ -454,6 +526,8 @@ class WorkspaceManager @Inject constructor(
         File(jcodeDir, "${oldDir.name}.yaml").takeIf { it.isFile }?.renameTo(File(jcodeDir, "$sanitized.yaml"))
 
         workspaceDao.updateProject(projectId, sanitized, newDir.absolutePath)
+        // Its Recent row follows it; left on the old path it would be pruned as a deleted folder.
+        workspaceDao.moveRecent(oldDir.absolutePath, newDir.absolutePath)
         nodeMetaCache.remove(oldDir.absolutePath)
         nodeMetaCache.remove(newDir.absolutePath)
         true
@@ -503,14 +577,7 @@ class WorkspaceManager @Inject constructor(
         )
 
         val projectId = workspaceDao.upsertProject(project)
-        workspaceDao.upsertRecent(
-            RecentEntity(
-                uri = project.location,
-                kind = project.kind,
-                lastOpened = now,
-                pinned = false,
-            )
-        )
+        touchRecent(project.location, project.kind)
 
         if (path is FsPath.Saf) {
             safPermissionStore.remember(path.uri)
@@ -647,20 +714,16 @@ class WorkspaceManager @Inject constructor(
 
     // --- Folder type detection + assignment (.jcode is the source of truth; not stored in the DB) ---
 
-    /** Derived (nodeType, templateId) per project location. The workspace flow re-derives node types
-     *  on every emission; caching keeps the (flaky, IPC-bound) SAF `.jcode` read from running each
-     *  time, so a folder's type stays stable instead of flickering. Invalidated whenever we write it. */
-    private val nodeMetaCache = java.util.concurrent.ConcurrentHashMap<String, Pair<WorkspaceNodeType, String?>>()
-
     private fun Workspace.withNodeTypes(): Workspace =
         copy(projects = projects.map { it.withNodeType() })
 
     private fun Project.withNodeType(): Project {
-        val (type, template) = nodeMetaCache.getOrPut(location) {
-            parseNodeMeta(readFolderConfig(fsPath))
-        }
+        val (type, template) = nodeMeta(fsPath)
         return copy(nodeType = type, templateId = template)
     }
+
+    private fun nodeMeta(path: FsPath): Pair<WorkspaceNodeType, String?> =
+        nodeMetaCache.getOrPut(path.locationKey()) { parseNodeMeta(readFolderConfig(path)) }
 
     private fun FsPath.locationKey(): String = when (this) {
         is FsPath.Local -> file.absolutePath
@@ -757,4 +820,16 @@ class WorkspaceManager @Inject constructor(
         }
         return type to template
     }
+}
+
+/**
+ * True when [dir] is missing and the nearest folder above it that still exists can be listed, so the
+ * absence is real. A folder that only looks missing because its storage is unreadable (a legacy
+ * shared-storage path without All-files access) is not gone, and its Recent row stays.
+ */
+internal fun isFolderGone(dir: File): Boolean {
+    if (dir.exists()) return false
+    var ancestor = dir.parentFile
+    while (ancestor != null && !ancestor.exists()) ancestor = ancestor.parentFile
+    return ancestor?.list() != null
 }

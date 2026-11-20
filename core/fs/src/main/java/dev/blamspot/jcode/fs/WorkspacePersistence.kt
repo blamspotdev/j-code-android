@@ -47,6 +47,9 @@ interface WorkspaceDao {
     @Query("SELECT * FROM projects WHERE id = :id LIMIT 1")
     suspend fun getProject(id: Long): ProjectEntity?
 
+    @Query("SELECT * FROM projects WHERE workspaceId = :workspaceId AND location = :location LIMIT 1")
+    suspend fun getProjectByLocation(workspaceId: Long, location: String): ProjectEntity?
+
     // --- One-time ext4 migration helpers (re-anchor absolute host paths; see WorkspaceManager). ---
     @Query("SELECT * FROM workspaces")
     suspend fun getAllWorkspaces(): List<WorkspaceEntity>
@@ -64,6 +67,9 @@ interface WorkspaceDao {
 
     @Query("DELETE FROM recents WHERE uri = :uri")
     suspend fun deleteRecent(uri: String)
+
+    @Query("UPDATE OR REPLACE recents SET uri = :newUri WHERE uri = :oldUri")
+    suspend fun moveRecent(oldUri: String, newUri: String)
 
     @Query("SELECT location FROM projects WHERE workspaceId = :workspaceId")
     suspend fun getProjectLocations(workspaceId: Long): List<String>

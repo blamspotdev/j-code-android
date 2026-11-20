@@ -181,6 +181,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -401,7 +402,8 @@ import dev.blamspot.jcode.fs.FsKind
 import dev.blamspot.jcode.fs.FsPath
 import dev.blamspot.jcode.fs.Project
 import dev.blamspot.jcode.fs.ProjectKind
-import dev.blamspot.jcode.fs.RecentEntity
+import dev.blamspot.jcode.fs.RecentFolder
+import dev.blamspot.jcode.fs.WorkspaceNodeType
 import dev.blamspot.jcode.run.ProjectRunner
 import dev.blamspot.jcode.run.BuildConfigPage
 import dev.blamspot.jcode.run.RunConfigPage
@@ -1381,6 +1383,8 @@ fun JCodeApp(
                 pendingTreeExport = File(dir).name.ifBlank { "project" } + "\n" + dir
                 exportTreeLauncher.launch(null)
             },
+            onRemoveRecent = viewModel::removeRecent,
+            onRecheckRecents = viewModel::recheckRecents,
             onNewProject = viewModel::requestNew,
             onOpenFolder = { openFolderLauncher.launch(null) },
             startActions = contributedStartActions,
@@ -4690,9 +4694,11 @@ private fun dev.blamspot.jcode.core.debug.DapVariable.asInspected() =
  * untouched.
  */
 internal data class EditorEmptyActions(
-    val recents: List<RecentEntity> = emptyList(),
-    val onOpenRecent: (RecentEntity) -> Unit = {},
-    val onExportRecent: (RecentEntity) -> Unit = {},
+    val recents: List<RecentFolder> = emptyList(),
+    val onOpenRecent: (RecentFolder) -> Unit = {},
+    val onExportRecent: (RecentFolder) -> Unit = {},
+    val onRemoveRecent: (RecentFolder) -> Unit = {},
+    val onRecheckRecents: () -> Unit = {},
     val onNewProject: () -> Unit = {},
     val onOpenFolder: () -> Unit = {},
     /** Extension-contributed actions (e.g. Clone, Remote Repo) shown after New/Open Folder. */
@@ -4777,6 +4783,13 @@ private fun EditorEmptyHint(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modifier) {
+    // Coming back to this screen (or to the app, from a file manager) is when a listed folder may
+    // have been deleted, and nothing in the database says so.
+    val recheckRecents by rememberUpdatedState(actions.onRecheckRecents)
+    LifecycleResumeEffect(Unit) {
+        recheckRecents()
+        onPauseOrDispose { }
+    }
     Box(modifier = modifier, contentAlignment = Alignment.TopCenter) {
         Column(
             modifier = Modifier
@@ -4812,6 +4825,7 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
                             recent = recent,
                             onOpen = { actions.onOpenRecent(recent) },
                             onExport = { actions.onExportRecent(recent) },
+                            onRemove = { actions.onRemoveRecent(recent) },
                         )
                     }
                 }
@@ -4887,8 +4901,9 @@ private fun StartSectionLabel(text: String) {
 }
 
 @Composable
-private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit, onExport: () -> Unit) {
+private fun RecentRow(recent: RecentFolder, onOpen: () -> Unit, onExport: () -> Unit, onRemove: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
+    val isWorkspace = recent.nodeType == WorkspaceNodeType.Workspace
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -4913,18 +4928,26 @@ private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit, onExport: () -> 
                         name = recentDisplayName(recent),
                         isDirectory = true,
                         size = IconSize.sm,
-                        fallback = JCodeIcon.Code,
+                        // The project roster's glyphs, so a workspace reads as one here too.
+                        fallback = if (isWorkspace) JCodeIcon.Files else JCodeIcon.Code,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = recentDisplayName(recent),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Space.s),
+                ) {
+                    Text(
+                        text = recentDisplayName(recent),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    RecentKindLabel(isWorkspace)
+                }
                 Text(
                     text = recentSubtitle(recent),
                     style = MaterialTheme.typography.bodySmall,
@@ -4933,40 +4956,62 @@ private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit, onExport: () -> 
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            // SAF recents have no local dir to copy out; only offer Export for Local ones.
-            if (recent.kind == ProjectKind.Local) {
-                Box {
-                    IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(32.dp)) {
-                        Icon(
-                            painter = jcIcon(JCodeIcon.MoreVert),
-                            contentDescription = "Recent project actions",
-                            modifier = Modifier.size(IconSize.md),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    CompactContextMenu(
-                        expanded = menuOpen,
-                        onDismissRequest = { menuOpen = false },
-                        listActions = listOf(
-                            ContextAction(JCodeIcon.Save, "Export to storage") { onExport() },
-                        ),
+            Box {
+                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        painter = jcIcon(JCodeIcon.MoreVert),
+                        contentDescription = "Recent folder actions",
+                        modifier = Modifier.size(IconSize.md),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                CompactContextMenu(
+                    expanded = menuOpen,
+                    onDismissRequest = { menuOpen = false },
+                    listActions = buildList {
+                        // SAF recents have no local dir to copy out; only offer Export for Local ones.
+                        if (recent.kind == ProjectKind.Local) {
+                            add(ContextAction(JCodeIcon.Save, "Export to storage") { onExport() })
+                        }
+                        add(ContextAction(JCodeIcon.Close, "Remove from Recent") { onRemove() })
+                    },
+                )
             }
         }
     }
 }
 
-private fun recentDisplayName(recent: RecentEntity): String = when (recent.kind) {
+/**
+ * "Workspace" or "Project" beside a Recent row's name. The two open differently (a workspace is
+ * entered and lists its projects; a project opens its files), so the list says which is which.
+ */
+@Composable
+private fun RecentKindLabel(isWorkspace: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(Radius.sm),
+        color = if (isWorkspace) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Text(
+            text = if (isWorkspace) "Workspace" else "Project",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isWorkspace) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = Space.s, vertical = Space.xxs),
+        )
+    }
+}
+
+private fun recentDisplayName(recent: RecentFolder): String = when (recent.kind) {
     ProjectKind.Local -> File(recent.uri).name.ifBlank { recent.uri }
     ProjectKind.Saf -> Uri.parse(recent.uri).lastPathSegment
         ?.substringAfterLast('/')?.substringAfterLast(':')?.ifBlank { null }
         ?: "Folder"
 }
 
-private fun recentSubtitle(recent: RecentEntity): String = when (recent.kind) {
-    ProjectKind.Local -> File(recent.uri).parent ?: recent.uri
-    ProjectKind.Saf -> "External folder"
+private fun recentSubtitle(recent: RecentFolder): String = when {
+    recent.workspaceName != null -> "In workspace ${recent.workspaceName}"
+    recent.kind == ProjectKind.Saf -> "External folder"
+    else -> File(recent.uri).parent ?: recent.uri
 }
 
 /** A live terminal instance shown in the Terminal-button long-press list. */
