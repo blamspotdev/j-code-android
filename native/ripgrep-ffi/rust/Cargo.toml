@@ -8,6 +8,6 @@ name = "ripgrep_ffi"
 crate-type = ["cdylib"]
 
 [dependencies]
-grep = "0.3"
+grep = "0.4"
 ignore = "0.4"
-jni = "0.21"
+jni = "0.22"

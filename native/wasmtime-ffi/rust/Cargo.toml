@@ -8,4 +8,4 @@ name = "jcode_wasm"
 crate-type = ["cdylib"]
 
 [dependencies]
-wasmtime = { version = "27", features = ["component-model"] }
+wasmtime = { version = "50", features = ["component-model"] }
