@@ -36,4 +36,6 @@ dependencies {
     ksp(libs.room.compiler)
     ksp(libs.hilt.compiler)
     implementation(project(":core:design"))
+
+    testImplementation(libs.junit)
 }

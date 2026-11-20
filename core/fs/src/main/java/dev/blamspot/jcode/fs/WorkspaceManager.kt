@@ -14,11 +14,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -43,6 +46,13 @@ class WorkspaceManager @Inject constructor(
     @Volatile
     private var defaultWorkspaceId: Long? = null
 
+    /** Derived (nodeType, templateId) per folder location. The workspace and recents flows re-derive
+     *  node types on every emission; caching keeps the (flaky, IPC-bound) SAF `.jcode` read from
+     *  running each time, so a folder's type stays stable instead of flickering. Invalidated whenever
+     *  we write it. Declared ahead of those flows: they start collecting while this class is still
+     *  being constructed. */
+    private val nodeMetaCache = java.util.concurrent.ConcurrentHashMap<String, Pair<WorkspaceNodeType, String?>>()
+
     /** Navigation trail from the Default Workspace down to the currently-open container. */
     private val _breadcrumb = MutableStateFlow<List<WorkspaceCrumb>>(emptyList())
     val breadcrumb: StateFlow<List<WorkspaceCrumb>> = _breadcrumb.asStateFlow()
@@ -60,9 +70,72 @@ class WorkspaceManager @Inject constructor(
     val rememberedSafTreeUris: StateFlow<Set<Uri>> = safPermissionStore.rememberedTrees
         .stateIn(scope, SharingStarted.Eagerly, emptySet())
 
-    /** Recently opened folders (projects/workspaces), most-recent first, pinned on top. */
-    val recents: StateFlow<List<RecentEntity>> = workspaceDao.observeRecents(12)
+    /** Bumped by [recheckRecents]. A folder deleted outside the app changes nothing in the database,
+     *  so without a nudge the Recent list would go on offering it. */
+    private val recentsRecheck = MutableStateFlow(0)
+
+    /**
+     * Recently opened folders (projects/workspaces), most-recent first, pinned on top, each resolved
+     * to what it is. A Local row whose folder is gone is deleted as it is found, so it neither shows
+     * nor holds one of the twelve places.
+     */
+    val recents: StateFlow<List<RecentFolder>> = combine(workspaceDao.observeRecents(12), recentsRecheck) { rows, _ -> rows }
+        .mapLatest(::resolveRecents)
         .stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    /** Re-check the Recent rows against the disk; see [recentsRecheck]. */
+    fun recheckRecents() {
+        recentsRecheck.update { it + 1 }
+    }
+
+    suspend fun removeRecent(uri: String) = withContext(Dispatchers.IO) {
+        workspaceDao.deleteRecent(uri)
+    }
+
+    /** Record [uri] as opened now, which moves it to the top of the Recent list. */
+    suspend fun touchRecent(uri: String, kind: ProjectKind) = withContext(Dispatchers.IO) {
+        workspaceDao.upsertRecent(
+            RecentEntity(uri = uri, kind = kind, lastOpened = System.currentTimeMillis(), pinned = false),
+        )
+    }
+
+    private suspend fun resolveRecents(rows: List<RecentEntity>): List<RecentFolder> {
+        val userWorkspaceNames = workspaceDao.getAllWorkspaces()
+            .filter { it.id != defaultWorkspaceId }
+            .associate { it.rootPath to it.name }
+        return rows.mapNotNull { row ->
+            when (row.kind) {
+                ProjectKind.Local -> {
+                    val dir = File(row.uri)
+                    if (isFolderGone(dir)) {
+                        workspaceDao.deleteRecent(row.uri)
+                        return@mapNotNull null
+                    }
+                    val nodeType = nodeMeta(FsPath.Local(dir)).first
+                    RecentFolder(
+                        uri = row.uri,
+                        kind = row.kind,
+                        nodeType = nodeType,
+                        workspaceName = dir.parent?.let(userWorkspaceNames::get).takeIf { nodeType == WorkspaceNodeType.Project },
+                    )
+                }
+
+                // A SAF tree whose grant was revoked throws from the provider query. That is no reason
+                // to take the whole list down with it: the row stays, labelled a plain project.
+                ProjectKind.Saf -> RecentFolder(
+                    uri = row.uri,
+                    kind = row.kind,
+                    nodeType = runCatching { nodeMeta(FsPath.Saf(Uri.parse(row.uri))).first }
+                        .getOrDefault(WorkspaceNodeType.Project),
+                )
+            }
+        }
+    }
+
+    /** Id of the project registered at [dir] in [workspaceId], or null if there is none. */
+    suspend fun projectIdAt(workspaceId: Long, dir: File): Long? = withContext(Dispatchers.IO) {
+        workspaceDao.getProjectByLocation(workspaceId, dir.absolutePath)?.id
+    }
 
     init {
         scope.launch {
@@ -71,6 +144,7 @@ class WorkspaceManager @Inject constructor(
             // would create a NEW empty Default Workspace and orphan every existing project.
             migrateProjectsToExt4IfNeeded()
             val workspace = ensureDefaultWorkspace()
+            dropWorkspaceRowsFromDefault(workspace)
             _breadcrumb.value = listOf(WorkspaceCrumb(workspace.id, workspace.name))
             currentWorkspaceId.value = workspace.id
         }
@@ -244,10 +318,10 @@ class WorkspaceManager @Inject constructor(
 
     /**
      * Like [createNode] but places the folder under an explicitly chosen [workspaceId] (its flat
-     * projects root for the Default Workspace, else that workspace's own folder) and registers the
-     * project there. Unlike [createNode] it never reads the async [currentWorkspace] flow, so it is
-     * safe to call right after requesting a workspace switch (e.g. the Source Control clone flow's
-     * destination selector) without racing the switch.
+     * projects root for the Default Workspace, else that workspace's own folder) and registers it
+     * there through [registerNodeIn]. Unlike [createNode] it never reads the async
+     * [currentWorkspace] flow, so it is safe to call right after requesting a workspace switch (e.g.
+     * the Source Control clone flow's destination selector) without racing the switch.
      */
     suspend fun createNodeIn(
         workspaceId: Long,
@@ -264,16 +338,51 @@ class WorkspaceManager @Inject constructor(
         val path = FsPath.Local(directory)
         validateWritable(path)
         writeNodeConfig(directory, nodeType, templateId)
+        return registerNodeIn(path, workspaceId, nodeType, templateId)
+    }
+
+    /**
+     * Register a new node under [workspaceId], except a top-level workspace: the Default Workspace's
+     * single slot would hand it back as the open project once the workspace closed. That node is
+     * reached through Recent and its own [WorkspaceEntity], so it is returned unregistered (id 0).
+     */
+    private suspend fun registerNodeIn(
+        path: FsPath.Local,
+        workspaceId: Long,
+        nodeType: WorkspaceNodeType,
+        templateId: String?,
+    ): Project {
+        if (nodeType == WorkspaceNodeType.Workspace && workspaceId == ensureDefaultWorkspaceId()) {
+            return Project(
+                id = 0L,
+                kind = ProjectKind.Local,
+                location = path.file.absolutePath,
+                name = sanitizedFolderName(path.file.name),
+                distroBindTarget = "",
+                order = 0,
+                nodeType = nodeType,
+            )
+        }
         return registerProjectIn(path, workspaceId).copy(nodeType = nodeType, templateId = templateId)
     }
 
     /**
+     * Drop the rows earlier builds gave top-level workspaces in the Default Workspace. SAF rows are
+     * kept: a SAF tree cannot be entered as a workspace, so its row is all that reaches it.
+     */
+    private suspend fun dropWorkspaceRowsFromDefault(default: Workspace) = withContext(Dispatchers.IO) {
+        default.projects
+            .filter { it.kind == ProjectKind.Local && nodeMeta(it.fsPath).first == WorkspaceNodeType.Workspace }
+            .forEach { workspaceDao.deleteProject(it.id) }
+    }
+
+    /**
      * Move an already-populated staged folder (e.g. a clone from the /sources staging dir) under
-     * [workspaceId]'s base dir and register it there as [nodeType]. The folder name is uniquified on
-     * collision ("-1", "-2", …). Same-filesystem rename is attempted first; a copy+delete fallback
-     * covers the (unexpected) cross-device case. The type is upserted into the folder's `.jcode`
-     * config rather than written over it — a cloned repo may ship one, and its settings are the
-     * user's, not ours to drop.
+     * [workspaceId]'s base dir and register it there as [nodeType] through [registerNodeIn]. The
+     * folder name is uniquified on collision ("-1", "-2", …). Same-filesystem rename is attempted
+     * first; a copy+delete fallback covers the (unexpected) cross-device case. The type is upserted
+     * into the folder's `.jcode` config rather than written over it — a cloned repo may ship one, and
+     * its settings are the user's, not ours to drop.
      */
     suspend fun adoptFolderIn(workspaceId: Long, staged: File, nodeType: WorkspaceNodeType): Project {
         val destination = withContext(Dispatchers.IO) {
@@ -298,7 +407,7 @@ class WorkspaceManager @Inject constructor(
         }
         return try {
             setFolderType(FsPath.Local(destination), nodeType)
-            registerProjectIn(FsPath.Local(destination), workspaceId).copy(nodeType = nodeType, templateId = null)
+            registerNodeIn(FsPath.Local(destination), workspaceId, nodeType, templateId = null)
         } catch (t: Throwable) {
             // Registration failed after the move: return the folder to staging so it stays visible in
             // the staging list instead of vanishing from every UI.
@@ -362,6 +471,8 @@ class WorkspaceManager @Inject constructor(
 
         openWorkspace(workspaceId)
         pushCrumb(workspaceId, displayName)
+        // However it was entered (Open Folder, the roster, Recent), a workspace is now a recent one.
+        touchRecent(rootPath, ProjectKind.Local)
         workspaceId
     }
 
@@ -454,6 +565,8 @@ class WorkspaceManager @Inject constructor(
         File(jcodeDir, "${oldDir.name}.yaml").takeIf { it.isFile }?.renameTo(File(jcodeDir, "$sanitized.yaml"))
 
         workspaceDao.updateProject(projectId, sanitized, newDir.absolutePath)
+        // Its Recent row follows it; left on the old path it would be pruned as a deleted folder.
+        workspaceDao.moveRecent(oldDir.absolutePath, newDir.absolutePath)
         nodeMetaCache.remove(oldDir.absolutePath)
         nodeMetaCache.remove(newDir.absolutePath)
         true
@@ -503,14 +616,7 @@ class WorkspaceManager @Inject constructor(
         )
 
         val projectId = workspaceDao.upsertProject(project)
-        workspaceDao.upsertRecent(
-            RecentEntity(
-                uri = project.location,
-                kind = project.kind,
-                lastOpened = now,
-                pinned = false,
-            )
-        )
+        touchRecent(project.location, project.kind)
 
         if (path is FsPath.Saf) {
             safPermissionStore.remember(path.uri)
@@ -647,20 +753,16 @@ class WorkspaceManager @Inject constructor(
 
     // --- Folder type detection + assignment (.jcode is the source of truth; not stored in the DB) ---
 
-    /** Derived (nodeType, templateId) per project location. The workspace flow re-derives node types
-     *  on every emission; caching keeps the (flaky, IPC-bound) SAF `.jcode` read from running each
-     *  time, so a folder's type stays stable instead of flickering. Invalidated whenever we write it. */
-    private val nodeMetaCache = java.util.concurrent.ConcurrentHashMap<String, Pair<WorkspaceNodeType, String?>>()
-
     private fun Workspace.withNodeTypes(): Workspace =
         copy(projects = projects.map { it.withNodeType() })
 
     private fun Project.withNodeType(): Project {
-        val (type, template) = nodeMetaCache.getOrPut(location) {
-            parseNodeMeta(readFolderConfig(fsPath))
-        }
+        val (type, template) = nodeMeta(fsPath)
         return copy(nodeType = type, templateId = template)
     }
+
+    private fun nodeMeta(path: FsPath): Pair<WorkspaceNodeType, String?> =
+        nodeMetaCache.getOrPut(path.locationKey()) { parseNodeMeta(readFolderConfig(path)) }
 
     private fun FsPath.locationKey(): String = when (this) {
         is FsPath.Local -> file.absolutePath
@@ -757,4 +859,16 @@ class WorkspaceManager @Inject constructor(
         }
         return type to template
     }
+}
+
+/**
+ * True when [dir] is missing and the nearest folder above it that still exists can be listed, so the
+ * absence is real. A folder that only looks missing because its storage is unreadable (a legacy
+ * shared-storage path without All-files access) is not gone, and its Recent row stays.
+ */
+internal fun isFolderGone(dir: File): Boolean {
+    if (dir.exists()) return false
+    var ancestor = dir.parentFile
+    while (ancestor != null && !ancestor.exists()) ancestor = ancestor.parentFile
+    return ancestor?.list() != null
 }

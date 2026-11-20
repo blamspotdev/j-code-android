@@ -106,7 +106,7 @@ import dev.blamspot.jcode.fs.copyLocalTreeToDocumentTree
 import dev.blamspot.jcode.fs.folderDisplayName
 import dev.blamspot.jcode.fs.Project
 import dev.blamspot.jcode.fs.ProjectKind
-import dev.blamspot.jcode.fs.RecentEntity
+import dev.blamspot.jcode.fs.RecentFolder
 import dev.blamspot.jcode.fs.scanFolderForImport
 import dev.blamspot.jcode.fs.TrashSource
 import dev.blamspot.jcode.fs.Workspace
@@ -3778,15 +3778,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Recently opened folders (most-recent first) for the empty-editor "Recent" list. */
-    val recents: StateFlow<List<RecentEntity>> = workspaceManager.recents
+    val recents: StateFlow<List<RecentFolder>> = workspaceManager.recents
 
-    /** Re-open a recent folder; [openExternalFolder] enters it as a workspace or opens it as a project. */
-    fun openRecent(recent: RecentEntity) {
-        val path = when (recent.kind) {
-            ProjectKind.Local -> FsPath.Local(File(recent.uri))
-            ProjectKind.Saf -> FsPath.Saf(Uri.parse(recent.uri))
+    /** Re-check the Recent list against the disk, so a folder deleted outside JCode drops out of it. */
+    fun recheckRecents() = workspaceManager.recheckRecents()
+
+    fun removeRecent(recent: RecentFolder) {
+        viewModelScope.launch { workspaceManager.removeRecent(recent.uri) }
+    }
+
+    /**
+     * Re-open a Recent row as what it is, from the top of the trail rather than inside whatever is open
+     * now: a workspace is entered; a project inside a User Workspace opens in that workspace; any other
+     * project opens on its own in the Default Workspace. A folder that has gone is dropped from the
+     * list instead of being recreated empty, and one off app storage goes through the import path, as
+     * Open Folder does.
+     */
+    fun openRecent(recent: RecentFolder) {
+        if (recent.kind == ProjectKind.Saf) {
+            openExternalFolder(FsPath.Saf(Uri.parse(recent.uri)))
+            return
         }
-        openExternalFolder(path)
+        val dir = File(recent.uri)
+        viewModelScope.launch {
+            if (!dir.isDirectory) {
+                workspaceManager.removeRecent(recent.uri)
+                emitMessage("'${dir.name}' no longer exists, so it was removed from Recent.")
+                return@launch
+            }
+            if (!workspaceManager.isOnManagedStorage(FsPath.Local(dir))) {
+                importExternalFolder(FsPath.Local(dir))
+                return@launch
+            }
+            if (!saveAllDirtyAwait()) {
+                emitMessage("Save or close open files before opening a folder.")
+                return@launch
+            }
+            returnToDefaultWorkspace()
+            val workspaceName = recent.workspaceName
+            val workspaceRoot = dir.parentFile
+            when {
+                recent.nodeType == WorkspaceNodeType.Workspace ->
+                    workspaceManager.enterWorkspaceFolder(dir, dir.name)
+
+                workspaceName != null && workspaceRoot != null -> {
+                    val workspaceId = workspaceManager.enterWorkspaceFolder(workspaceRoot, workspaceName)
+                    _selectedProjectId.value = workspaceManager.projectIdAt(workspaceId, dir)
+                    workspaceManager.touchRecent(recent.uri, ProjectKind.Local)
+                }
+
+                else -> {
+                    resetDefaultWorkspaceProject()
+                    val project = workspaceManager.addFolder(FsPath.Local(dir))
+                    _selectedProjectId.value = project.id
+                    emitMessage("Opened '${project.name}'.")
+                }
+            }
+        }
     }
 
     fun removeProject(projectId: Long) {
@@ -3814,15 +3862,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Leave the current User Workspace and return to the Default Workspace (the first crumb). */
     fun closeWorkspace() {
-        val defaultId = breadcrumb.value.firstOrNull()?.id ?: return
+        if (breadcrumb.value.isEmpty()) return
         viewModelScope.launch {
-            clearEditorTabs()
-            workspaceManager.navigateToWorkspace(defaultId)
-            // currentWorkspace is DB-derived; wait for it to reflect the switch so the immediate
-            // session save records the default workspace, not the one just closed.
-            withTimeoutOrNull(2_000) { currentWorkspace.first { it?.id == defaultId } }
+            returnToDefaultWorkspace()
             persistSession()
         }
+    }
+
+    /**
+     * Close the editor tabs and make the Default Workspace the whole trail, then wait for
+     * [currentWorkspace] to show it. That flow is DB-derived, so whatever reads it straight after the
+     * switch (the single-slot reset, the session save) would otherwise act on the workspace just left.
+     */
+    private suspend fun returnToDefaultWorkspace() {
+        val defaultId = workspaceManager.ensureDefaultWorkspaceId()
+        clearEditorTabs()
+        workspaceManager.restoreWorkspace(defaultId)
+        withTimeoutOrNull(2_000) { currentWorkspace.first { it?.id == defaultId } }
     }
 
     /**

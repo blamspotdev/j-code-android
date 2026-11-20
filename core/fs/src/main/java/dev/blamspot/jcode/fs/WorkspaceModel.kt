@@ -65,6 +65,18 @@ data class RecentEntity(
     val pinned: Boolean,
 )
 
+/**
+ * A Recent row as the start screen shows it: the folder, whether it is a workspace or a project, and
+ * for a project inside a User Workspace the workspace that holds it, which is where it opens.
+ */
+@Immutable
+data class RecentFolder(
+    val uri: String,
+    val kind: ProjectKind,
+    val nodeType: WorkspaceNodeType,
+    val workspaceName: String? = null,
+)
+
 data class WorkspaceWithProjects(
     @Embedded val workspace: WorkspaceEntity,
     @Relation(parentColumn = "id", entityColumn = "workspaceId")

@@ -107,17 +107,47 @@ Covered in detail in
 | Adding | `addFolder(path)`, `addFolderWithType(path, nodeType)`, `createNode(...)`, `createNodeIn(...)`, `adoptFolderIn(workspaceId, staged, nodeType)` |
 | Navigation | `enterWorkspaceFolder(project)`, `enterWorkspaceFolder(folder, displayName)`, `enterFolderAsWorkspace(path)`, `navigateToWorkspace(id)`, `navigateBack()`, `pushCrumb(id, name)` |
 | Editing | `renameProject(projectId, newName)`, `removeProject(projectId)` |
+| Recents | `recents`, `recheckRecents()`, `removeRecent(uri)`, `touchRecent(uri, kind)`, `projectIdAt(workspaceId, dir)` |
 | Storage | `refreshStorageRoots()`, `isOnManagedStorage(path)`, `isManagedRoot(path)`, `resolveManageable(path)`, `safTreeToLocal(uri)` |
 | Queries | `isWorkspaceFolder(path)`, `folderNeedsType(path)`, `fsFor(path)`, `sanitizedFolderName(name)` |
 
 `adoptFolderIn` is the clone-staging hand-off: a repository cloned into `/sources` is classified by
 the user and moved under the projects root as a Project or a Workspace.
 
+`createNodeIn` and `adoptFolderIn` register the new folder as a node of `workspaceId`, except a
+Workspace made at the top level. The Default Workspace's single slot is its open project, so a row
+there handed the workspace back as an open project once it was closed. That node is returned
+unregistered (id 0) and is reached through Recent and its own `WorkspaceEntity`; startup drops the
+rows earlier builds made. A workspace nested in a User Workspace is still registered there.
+
 `resolveManageable` remaps a SAF tree URI back to a local `File` when the provider is the local
 filesystem, which is what lets an "Open folder" via SAF still be bind-mounted into the distro. When
 the remap fails the folder remains editable but not buildable.
 
 All disk work runs on `Dispatchers.IO`.
+
+### 5.1 The Recent list
+
+The start screen (the editor area with no project open) lists up to twelve `recents` rows, pinned
+first, then most recently opened.
+
+- **Recorded** by `touchRecent`: every project registration (Open Folder, New Folder, import, clone
+  adoption) and every `enterWorkspaceFolder`, whichever way the workspace was entered. Opening a row
+  touches it again. `renameProject` moves its row to the new path (`moveRecent`).
+- **Resolved** to a `RecentFolder` on each emission: `nodeType` comes from the folder's YAML like any
+  node's, and a Project whose parent folder is a User Workspace's `rootPath` carries that workspace's
+  name. The row shows a Workspace or Project label, and "In workspace <name>" for the latter.
+- **Pruned**: a Local row is deleted when `isFolderGone(dir)` holds, meaning the folder is missing
+  and the nearest ancestor that still exists can be listed. A folder that only looks missing because
+  its storage is unreadable keeps its row. Deleting a folder outside JCode changes nothing in the
+  database, so the start screen calls `recheckRecents()` each time it resumes. Rows can also be
+  removed by hand ("Remove from Recent").
+- **Opened** (`MainViewModel.openRecent`) from the top of the trail, never nested inside whatever is
+  open: a Workspace is entered from the Default Workspace; a Project inside a User Workspace enters
+  that workspace and selects it; any other Project opens on its own in the Default Workspace's
+  single slot. A row whose folder is gone is removed instead of being recreated, a Local folder off
+  managed storage and any SAF row go through the import path Open Folder uses, and no type prompt is
+  shown, since a recorded folder was already opened as what it is.
 
 ---
 
@@ -229,7 +259,7 @@ they are about to restore, not to reproduce it.
 
 - Room is at version 1 with destructive fallback: any schema change loses the user's workspace list.
 - `SafFs` polls every 2 seconds; a large SAF tree is correspondingly costly to watch.
-- `RecentEntity.pinned` is modelled but the recents UI surface is minimal.
+- `RecentEntity.pinned` is modelled and sorts first, but nothing sets it.
 
 ---
 
