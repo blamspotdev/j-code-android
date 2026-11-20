@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -44,6 +43,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.graphics.luminance
+import dev.blamspot.jcode.design.rememberTextCopier
+import dev.blamspot.jcode.design.ValueTextField
 import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.Radius
 import dev.blamspot.jcode.design.Space
@@ -70,7 +71,6 @@ import androidx.compose.foundation.background
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -205,7 +205,7 @@ fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
 @Composable
 private fun PaneMenuButton(pane: DevToolsPane) {
     var open by remember { mutableStateOf(false) }
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberTextCopier()
     Box {
         Icon(
             painter = jcIcon(JCodeIcon.MoreVert),
@@ -251,7 +251,7 @@ private fun PaneMenuButton(pane: DevToolsPane) {
                         } else {
                             BuiltinBrowser.console.joinToString("\n") { "[${it.level}] ${it.message}" }
                         }
-                        clipboard.setText(AnnotatedString(text))
+                        copyText(text)
                     },
                     ContextAction(
                         icon = JCodeIcon.Clear,
@@ -287,7 +287,7 @@ private fun clearSiteData() {
 private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier = Modifier) {
     val entries = BuiltinBrowser.console
     val listState = rememberLazyListState()
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberTextCopier()
     // The terminal's size, not a number of this pane's own. Both are monospace logs of a machine
     // talking back, they are two tabs of the same drawer, and somebody who sized the terminal to
     // something they can read on this screen has already answered the question for both.
@@ -335,7 +335,7 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
                 )
             }
         } else {
-            items(rows) { row -> ConsoleRowView(row, fontSize, clipboard, onOpenSource) }
+            items(rows) { row -> ConsoleRowView(row, fontSize, copyText, onOpenSource) }
         }
         item {
             Row(
@@ -352,7 +352,7 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
                     textAlign = TextAlign.Center,
                     modifier = Modifier.width(14.dp),
                 )
-                BasicTextField(
+                ValueTextField(
                     value = input,
                     onValueChange = { input = it },
                     singleLine = true,
@@ -426,7 +426,7 @@ private fun foldConsole(entries: List<BrowserConsoleEntry>): List<ConsoleRow> {
 private fun ConsoleRowView(
     row: ConsoleRow,
     fontSize: TextUnit,
-    clipboard: androidx.compose.ui.platform.ClipboardManager,
+    copyText: (String) -> Unit,
     onOpenSource: (String, Int) -> Unit,
 ) {
     // Leading is a proportion of the type rather than a constant, so a console set to 18sp does not
@@ -463,7 +463,7 @@ private fun ConsoleRowView(
             .background(tint)
             .combinedClickable(
                 onClick = { if (expandable) expanded = !expanded },
-                onLongClick = { clipboard.setText(AnnotatedString(entry.message)) },
+                onLongClick = { copyText(entry.message) },
             )
             .padding(vertical = Space.xs),
     ) {
@@ -833,7 +833,7 @@ private fun ApplicationPane(modifier: Modifier = Modifier) {
                         add("Storage" to if (survey.persisted) "persistent" else "best-effort")
                     }
                 },
-                LocalClipboardManager.current,
+                rememberTextCopier(),
             )
         }
         StoredSection("Local storage", survey.local, ::refresh, pageUrl) { open = it }
@@ -982,7 +982,7 @@ private fun StoredValueDetail(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberTextCopier()
     Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -1021,10 +1021,10 @@ private fun StoredValueDetail(
                     add("Size" to formatBytes(entry.value.length.toLong()))
                     if (entry.httpOnly) add("Flag" to "HttpOnly — not visible to page script")
                 },
-                clipboard,
+                copyText,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f))
-            DetailBody(entry.value, truncated = false, clipboard = clipboard)
+            DetailBody(entry.value, truncated = false, copyText = copyText)
         }
     }
 }
@@ -1161,7 +1161,7 @@ private fun ManifestSection(url: String, manifest: String) {
         if (manifest.isBlank()) {
             SectionNote("Declared, but could not be read — it may be cross-origin.")
         } else {
-            DetailBody(manifest, truncated = false, clipboard = LocalClipboardManager.current)
+            DetailBody(manifest, truncated = false, copyText = rememberTextCopier())
         }
     }
 }
@@ -1503,7 +1503,7 @@ private fun NetworkRow(e: BrowserNetworkEntry, onClick: () -> Unit) {
  */
 @Composable
 private fun NetworkDetail(e: BrowserNetworkEntry, onBack: () -> Unit, modifier: Modifier = Modifier) {
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberTextCopier()
     Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -1549,7 +1549,7 @@ private fun NetworkDetail(e: BrowserNetworkEntry, onBack: () -> Unit, modifier: 
                         )
                         add("Time" to "${e.durationMs} ms")
                     },
-                    clipboard,
+                    copyText,
                 )
             }
             if (e.timingOnly) {
@@ -1566,22 +1566,22 @@ private fun NetworkDetail(e: BrowserNetworkEntry, onBack: () -> Unit, modifier: 
             }
             if (e.requestHeaders.isNotEmpty()) {
                 DetailSection("Request headers", "${e.requestHeaders.size}") {
-                    DetailPairs(e.requestHeaders, clipboard)
+                    DetailPairs(e.requestHeaders, copyText)
                 }
             }
             if (e.requestBody.isNotBlank()) {
                 DetailSection("Payload", initiallyExpanded = true) {
-                    DetailBody(e.requestBody, e.bodyTruncated, clipboard)
+                    DetailBody(e.requestBody, e.bodyTruncated, copyText)
                 }
             }
             if (e.responseHeaders.isNotEmpty()) {
                 DetailSection("Response headers", "${e.responseHeaders.size}") {
-                    DetailPairs(e.responseHeaders, clipboard)
+                    DetailPairs(e.responseHeaders, copyText)
                 }
             }
             if (e.responseBody.isNotBlank()) {
                 DetailSection("Response", initiallyExpanded = true) {
-                    DetailBody(e.responseBody, e.bodyTruncated, clipboard)
+                    DetailBody(e.responseBody, e.bodyTruncated, copyText)
                 }
             } else if (!e.failed) {
                 Text(
@@ -1649,14 +1649,14 @@ private fun DetailSection(
 @Composable
 private fun DetailPairs(
     pairs: List<Pair<String, String>>,
-    clipboard: androidx.compose.ui.platform.ClipboardManager,
+    copyText: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = Space.ms, bottom = Space.s)) {
         pairs.forEach { (k, v) ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { clipboard.setText(AnnotatedString(v)) }
+                    .clickable { copyText(v) }
                     .padding(vertical = Space.xxs),
                 horizontalArrangement = Arrangement.spacedBy(Space.s),
             ) {
@@ -1683,7 +1683,7 @@ private fun DetailPairs(
 private fun DetailBody(
     raw: String,
     truncated: Boolean,
-    clipboard: androidx.compose.ui.platform.ClipboardManager,
+    copyText: (String) -> Unit,
 ) {
     // Pretty-printed when it parses as JSON, which is what most of these are and none of which is
     // readable as one long line on a phone-width panel.
@@ -1694,7 +1694,7 @@ private fun DetailBody(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier
-                .clickable { clipboard.setText(AnnotatedString(raw)) }
+                .clickable { copyText(raw) }
                 .padding(vertical = Space.xxs),
         )
         Text(

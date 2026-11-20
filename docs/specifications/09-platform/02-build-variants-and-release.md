@@ -20,20 +20,20 @@ and the post-build signing flow.
 
 | Component | Version | Source |
 |---|---|---|
-| AGP | 8.13.0 | `gradle/libs.versions.toml` |
-| Gradle | 8.14.3 | `gradle/wrapper/gradle-wrapper.properties` |
-| Kotlin | 2.2.20 | `gradle/libs.versions.toml` |
-| KSP | 2.2.20-2.0.2 | `gradle/libs.versions.toml` |
-| Hilt | 2.57.1 | `gradle/libs.versions.toml` |
-| Room | 2.8.4 | `gradle/libs.versions.toml` |
-| Compose BOM | 2025.01.00 | `gradle/libs.versions.toml` |
-| Material3 | 1.3.1 (adaptive 1.2.0) | `gradle/libs.versions.toml` |
-| Coroutines | 1.10.1 | `gradle/libs.versions.toml` |
+| AGP | 9.5.1 (Kotlin built in; no module applies `org.jetbrains.kotlin.android`) | `gradle/libs.versions.toml` |
+| Gradle | 9.9.2 | `gradle/wrapper/gradle-wrapper.properties` |
+| Kotlin | 2.4.21 (the Compose compiler plugin's version, which brings that Kotlin Gradle plugin onto the build classpath) | `gradle/libs.versions.toml` |
+| KSP | 2.3.14 | `gradle/libs.versions.toml` |
+| Hilt | 2.60.1 | `gradle/libs.versions.toml` |
+| Room | 2.8.5 | `gradle/libs.versions.toml` |
+| Compose BOM | 2026.11.01 | `gradle/libs.versions.toml` |
+| Material3 | 1.5.0 (adaptive 1.3.0), both from the BOM | `gradle/libs.versions.toml` |
+| Coroutines | 1.11.0 | `gradle/libs.versions.toml` |
 | JDK / JVM toolchain | 21 (Hilt's javac forced to 17) | root `build.gradle.kts` |
-| `compileSdk` | 36 | `app/build.gradle.kts` |
+| `compileSdk` | 37.1 (Compose 1.13 needs it), every module | root `build.gradle.kts` |
 | `minSdk` / `targetSdk` | 33 / 33 | `app/build.gradle.kts` |
-| NDK | 27.2.12479018 | `app/build.gradle.kts`, root `build.gradle.kts`, `scripts/build-release-common.sh` |
-| CMake | 3.28.3 desired; auto-detected from `$ANDROID_HOME/cmake`, newest installed as fallback | root `build.gradle.kts` |
+| NDK | 30.0.16248370 | root `build.gradle.kts` (`jcodeNdkVersion`, every module), `scripts/build-release-common.sh`, `scripts/build-release.ps1`, `.github/workflows/release.yml` |
+| CMake | 3.31.6 desired (the newest 3.x the SDK publishes); otherwise the newest installed 3.x at or above 3.24, then the newest installed | root `build.gradle.kts` |
 | C / C++ | C11 / C++17 | `native/CMakeLists.txt` |
 
 `settings.gradle.kts` sets `RepositoriesMode.FAIL_ON_PROJECT_REPOS`, so a module cannot declare its
@@ -369,9 +369,9 @@ creates the tag and the release with the APK attached.
 > **The workflow installs no CMake.** `native/CMakeLists.txt` uses
 > `$<LINK_LIBRARY:WHOLE_ARCHIVE,…>`, so the resolver in the root `build.gradle.kts` discards every
 > installed version below 3.24 — `cmake;3.22.1` included, which is what the SDK installs by default
-> and what the *release scripts* still pin. Asking for it adds a download the build then refuses to
+> which the release scripts used to pin. Asking for it adds a download the build then refuses to
 > use. The runner image ships a usable one; the workflow asserts that rather than installing, because
-> the resolver's fallback names `3.28.3`, a version the SDK does not publish as a package at all. The tag is created *by* the publish step
+> without one the build would fail late, at CMake configure. The tag is created *by* the publish step
 (`--target`), so a failed build never leaves a tag pointing at a release that does not exist, and an
 already-published tag is refused before the build rather than after it.
 
@@ -406,7 +406,7 @@ The local scripts remain, and are the same build without the publishing:
 
 They run `:app:assembleRelease` with `-PjcodeVersionName=…` (plus `-PjcodeIdSuffix=.beta` for Beta),
 resolve or install the SDK components (`platform-tools`, the platform package, build-tools,
-`ndk;27.2.12479018`, a CMake package — pinned at `3.22.1` in the scripts), and sign. `--label=` takes
+`ndk;30.0.16248370`, and `cmake;3.31.6` when no CMake is installed at all), and sign. `--label=` takes
 the same `alpha.N|beta.N|rc.N` shape and is validated the same way, but is **always explicit**
 (default `beta.1`): deriving the number means reading the published tags, and these scripts build
 without a network or a GitHub token by design. They produce a local APK and never publish, so
@@ -477,7 +477,7 @@ The root `detekt` task is currently a **bootstrap placeholder** registered in `b
 | A pre-release label that resolves to none of `alpha.N`/`beta.N`/`rc.N` | Refused before the build — it would derive the release tier, giving a preview the same `versionCode` as the release |
 | A hand-written label at or below one already published for the train | Refused before the build; a tag check alone cannot see the "below" case |
 | Release keystore secrets missing in Actions | The workflow fails at the signing step; nothing is published |
-| Wrong CMake version installed | Root script picks the newest available instead of 3.28.3 |
+| Wrong CMake version installed | Root script picks the newest installed 3.x at or above 3.24, else the newest installed, instead of 3.31.6 |
 
 ---
 

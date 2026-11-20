@@ -21,10 +21,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$NdkVersion = '27.2.12479018'
-$PlatformPkg = 'platforms;android-36'
-$BuildToolsPkg = 'build-tools;34.0.0'
-$CmakePkg = 'cmake;3.22.1'
+$NdkVersion = '30.0.16248370'
+$PlatformPkg = 'platforms;android-37.1'
+$BuildToolsPkg = 'build-tools;36.0.0'
+$CmakePkg = 'cmake;3.31.6'
 
 function Say([string]$m)  { Write-Host "[jcode] $m" -ForegroundColor Cyan }
 function Warn([string]$m) { Write-Host "[warn] $m" -ForegroundColor Yellow }
@@ -189,12 +189,12 @@ function Sdk-Component([string]$Path, [string]$Pkg, [string]$Label) {
 }
 
 Sdk-Component "$SdkRoot\ndk\$NdkVersion" "ndk;$NdkVersion" "NDK $NdkVersion"
-Sdk-Component "$SdkRoot\platforms\android-36" $PlatformPkg 'Android platform 36'
+Sdk-Component "$SdkRoot\platforms\android-37.1" $PlatformPkg 'Android platform 37.1'
 if (-not (Test-Path "$SdkRoot\cmake") -or -not (Get-ChildItem "$SdkRoot\cmake" -ErrorAction SilentlyContinue)) {
-    Sdk-Component "$SdkRoot\cmake\3.22.1" $CmakePkg 'SDK CMake'
+    Sdk-Component "$SdkRoot\cmake\3.31.6" $CmakePkg 'SDK CMake'
 }
 if (-not (Test-Path "$SdkRoot\build-tools") -or -not (Get-ChildItem "$SdkRoot\build-tools" -ErrorAction SilentlyContinue)) {
-    Sdk-Component "$SdkRoot\build-tools\34.0.0" $BuildToolsPkg 'Android build-tools'
+    Sdk-Component "$SdkRoot\build-tools\36.0.0" $BuildToolsPkg 'Android build-tools'
 }
 
 $CargoTasks = @()

@@ -129,7 +129,7 @@ fun JcTooltip(
                                 // If the long-press already opened the label, swallow this release so
                                 // the button doesn't also fire; a quick tap (nothing shown) clicks.
                                 if (state.isVisible) {
-                                    change?.consume()
+                                    change.consume()
                                     state.dismiss()
                                 }
                             }

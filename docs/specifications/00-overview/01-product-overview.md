@@ -18,7 +18,7 @@ real projects entirely on-device, with no companion app and no root.
 |---|---|
 | Version | 1.7.7 |
 | Package | `dev.blamspot.jcode` (`.debug` / `.beta` variants install side by side) |
-| Platform | Android 13+ (`minSdk` / `targetSdk` 33, `compileSdk` 36) |
+| Platform | Android 13+ (`minSdk` / `targetSdk` 33, `compileSdk` 37.1) |
 | ABI | `arm64-v8a` only, every variant — the APK installs on nothing else |
 | Language | Kotlin + Jetpack Compose, with C, C++ and Rust for performance-critical subsystems |
 | Licence | MIT |

@@ -1,6 +1,9 @@
 package dev.blamspot.jcode.design
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.FormatAlignLeft
+import androidx.compose.material.icons.automirrored.rounded.ManageSearch
+import androidx.compose.material.icons.automirrored.rounded.NoteAdd
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Palette
@@ -45,7 +48,6 @@ import androidx.compose.material.icons.rounded.DeveloperMode
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.FileOpen
-import androidx.compose.material.icons.rounded.FormatAlignLeft
 import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Folder
@@ -53,11 +55,9 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.IntegrationInstructions
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
-import androidx.compose.material.icons.rounded.ManageSearch
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MyLocation
-import androidx.compose.material.icons.rounded.NoteAdd
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.PushPin
@@ -167,7 +167,7 @@ val defaultUiIconSet = UiIconSet.ofVectors(
         JCodeIcon.Folder to Icons.Rounded.Folder,
         JCodeIcon.OpenFolder to Icons.Rounded.FolderOpen,
         JCodeIcon.NewFolder to Icons.Rounded.CreateNewFolder,
-        JCodeIcon.NewFile to Icons.Rounded.NoteAdd,
+        JCodeIcon.NewFile to Icons.AutoMirrored.Rounded.NoteAdd,
         JCodeIcon.Sdk to Icons.Rounded.BuildCircle,
         JCodeIcon.Palette to Icons.Rounded.Palette,
         JCodeIcon.Lock to Icons.Rounded.Lock,
@@ -241,8 +241,8 @@ val defaultUiIconSet = UiIconSet.ofVectors(
         JCodeIcon.SelectAll to Icons.Rounded.SelectAll,
         JCodeIcon.Clear to Icons.Rounded.ClearAll,
         JCodeIcon.Definition to Icons.Rounded.MyLocation,
-        JCodeIcon.References to Icons.Rounded.ManageSearch,
-        JCodeIcon.Format to Icons.Rounded.FormatAlignLeft,
+        JCodeIcon.References to Icons.AutoMirrored.Rounded.ManageSearch,
+        JCodeIcon.Format to Icons.AutoMirrored.Rounded.FormatAlignLeft,
         JCodeIcon.Preview to Icons.Rounded.Visibility,
         JCodeIcon.Pin to Icons.Rounded.PushPin,
         JCodeIcon.GoToLine to Icons.Rounded.FormatListNumbered,

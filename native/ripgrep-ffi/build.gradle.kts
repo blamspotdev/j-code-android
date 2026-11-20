@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
 }
 
 extra["cargoLibraryName"] = "ripgrep_ffi"
@@ -11,6 +10,6 @@ apply(from = rootProject.file("gradle/cargo.gradle.kts"))
 android {
     namespace = "dev.blamspot.jcode.nativeffi.ripgrep.ffi"
 
-    sourceSets.getByName("debug").jniLibs.srcDir(layout.buildDirectory.dir("generated/cargoJniLibs/debug"))
-    sourceSets.getByName("release").jniLibs.srcDir(layout.buildDirectory.dir("generated/cargoJniLibs/release"))
+    sourceSets.getByName("debug").jniLibs.directories += layout.buildDirectory.dir("generated/cargoJniLibs/debug").get().asFile.path
+    sourceSets.getByName("release").jniLibs.directories += layout.buildDirectory.dir("generated/cargoJniLibs/release").get().asFile.path
 }

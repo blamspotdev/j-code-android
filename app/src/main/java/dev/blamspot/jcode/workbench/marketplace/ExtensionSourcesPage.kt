@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -37,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.ProviderRelease
 import dev.blamspot.jcode.ProviderReleaseFetcher
+import dev.blamspot.jcode.design.ValueTextField
 import dev.blamspot.jcode.design.CompactFilledButton
 import dev.blamspot.jcode.design.CompactOutlinedButton
 import dev.blamspot.jcode.design.IconSize
@@ -309,7 +309,7 @@ private fun CompactUrlField(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            BasicTextField(
+            ValueTextField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,

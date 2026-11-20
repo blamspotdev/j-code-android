@@ -252,7 +252,7 @@ class RootfsManager(
             var hardlinks = 0
             var symlinkedLinks = 0
             TarArchiveInputStream(decompressed).use { tin ->
-                var entry = tin.nextTarEntry
+                var entry = tin.nextEntry
                 while (entry != null) {
                     val e = entry
                     val out = File(targetDir, e.name)
@@ -284,7 +284,7 @@ class RootfsManager(
                         }
                         // char/block/fifo device nodes: skip (proot fakes /dev; app can't mknod).
                     }
-                    entry = tin.nextTarEntry
+                    entry = tin.nextEntry
                 }
             }
             // A freshly extracted minimal image has no working DNS/host config and no system locale —

@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
@@ -90,7 +89,6 @@ val jcodeApplicationId: String =
 
 android {
     namespace = "dev.blamspot.jcode"
-    compileSdk = 36
 
     defaultConfig {
         applicationId = jcodeApplicationId
@@ -155,10 +153,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_21
     }
 
-    kotlinOptions {
-        jvmTarget = "21"
-    }
-
     buildFeatures {
         compose = true
         buildConfig = true
@@ -178,8 +172,6 @@ android {
             keepDebugSymbols += "**/libproot*.so"
         }
     }
-
-    ndkVersion = "27.2.12479018"
 }
 
 dependencies {

@@ -315,7 +315,7 @@ private fun StepperScreen(
                         running = running,
                         completed = completed,
                         enabled = distroStepEnabled,
-                        onImport = { onImportMigration?.invoke() },
+                        onImport = onImportMigration,
                         onSetUpFresh = { setUpFresh = true },
                     )
                 } else {

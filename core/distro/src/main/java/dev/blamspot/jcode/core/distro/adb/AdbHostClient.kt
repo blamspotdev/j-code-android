@@ -66,7 +66,6 @@ class AdbHostClient(
                 session.readTrailingStatus(service)
             }
         }
-        Unit
     }
 
     /**

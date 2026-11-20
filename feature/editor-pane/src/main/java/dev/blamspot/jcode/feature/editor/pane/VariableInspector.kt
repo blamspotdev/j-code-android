@@ -31,12 +31,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.blamspot.jcode.design.rememberTextCopier
 import dev.blamspot.jcode.design.AlertDialog
 import dev.blamspot.jcode.design.CompactOutlinedButton
 import dev.blamspot.jcode.design.CompactFilledButton
@@ -124,7 +123,7 @@ internal fun VariableInspectHeader(
     onInspect: () -> Unit,
     onCopied: () -> Unit,
 ) {
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberTextCopier()
     val scope = rememberCoroutineScope()
     var copying by remember(inspection) { mutableStateOf(false) }
     val resolved = inspection.resolved
@@ -186,7 +185,7 @@ internal fun VariableInspectHeader(
                 onClick = {
                     copying = true
                     scope.launch {
-                        clipboard.setText(AnnotatedString(resolved.toJson(expand)))
+                        copyText(resolved.toJson(expand))
                         copying = false
                         onCopied()
                     }
@@ -210,7 +209,7 @@ internal fun VariableDetailDialog(
     expand: ChildExpander?,
     onDismiss: () -> Unit,
 ) {
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberTextCopier()
     val scope = rememberCoroutineScope()
     var copying by remember(root) { mutableStateOf(false) }
     // reference -> children, populated on first expand. Absent = not fetched yet.
@@ -292,7 +291,7 @@ internal fun VariableDetailDialog(
                 onClick = {
                     copying = true
                     scope.launch {
-                        clipboard.setText(AnnotatedString(root.toJson(expand)))
+                        copyText(root.toJson(expand))
                         copying = false
                     }
                 },

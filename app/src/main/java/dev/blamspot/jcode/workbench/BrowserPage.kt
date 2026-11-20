@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -65,17 +64,17 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.blamspot.jcode.R
+import dev.blamspot.jcode.design.rememberTextCopier
+import dev.blamspot.jcode.design.ValueTextField
 import dev.blamspot.jcode.design.CompactContextMenu
 import dev.blamspot.jcode.design.ContextAction
 import dev.blamspot.jcode.design.IconSize
@@ -193,7 +192,7 @@ fun BrowserPage(modifier: Modifier = Modifier) {
     }
 
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberTextCopier()
     // Asked of the palette that is actually painting this tab, not of the phone: JCode's own theme
     // setting can differ from the device's, and the browser should be the colour of the window it is
     // in rather than the colour of the machine that window happens to be on.
@@ -262,7 +261,7 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                             webView = webView,
                         )
                     }
-                    BasicTextField(
+                    ValueTextField(
                         value = address,
                         onValueChange = { address = it; editing = true },
                         singleLine = true,
@@ -290,7 +289,7 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                     onDismiss = { menuOpen = false },
                     webView = webView,
                     context = context,
-                    onCopyUrl = { clipboard.setText(AnnotatedString(BuiltinBrowser.currentUrl.value)) },
+                    onCopyUrl = { copyText(BuiltinBrowser.currentUrl.value) },
                 )
             }
         }

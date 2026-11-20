@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
@@ -8,7 +7,6 @@ plugins {
 
 android {
     namespace = "dev.blamspot.jcode.feature.sdkmanager"
-    compileSdk = 36
 
     defaultConfig {
         minSdk = 33
@@ -17,10 +15,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
-    }
-
-    kotlinOptions {
-        jvmTarget = "21"
     }
 
     buildFeatures {

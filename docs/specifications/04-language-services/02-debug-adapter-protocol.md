@@ -223,8 +223,6 @@ Device-verified findings:
   is thin.
 - `:feature:debug`'s `DebugFeature` is a stub; the real UI is `app/src/main/java/dev/blamspot/jcode/DebugSessionPanel.kt` and
   `app/src/main/java/dev/blamspot/jcode/RunDebugPanel.kt`.
-- `kotlinx-serialization-json` is declared in `core/debug/build.gradle.kts` and unused — parsing is
-  `org.json`.
 - `stackTrace` is capped at 50 frames with no paging.
 - The idle read loop polls every 10 ms rather than blocking, unlike the LSP client.
 

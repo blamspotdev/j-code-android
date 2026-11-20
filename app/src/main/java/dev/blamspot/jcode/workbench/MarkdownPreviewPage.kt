@@ -38,15 +38,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material3.ColorScheme
 import android.content.res.Configuration
+import dev.blamspot.jcode.design.rememberTextCopier
 import dev.blamspot.jcode.design.CompactContextMenu
 import dev.blamspot.jcode.design.CompactSearchField
 import dev.blamspot.jcode.design.ContextAction
@@ -95,7 +94,7 @@ fun MarkdownPreviewPage(
     val state = tab.editorState ?: return
     val density = LocalDensity.current
     val menuExtras = LocalEditorMenuExtras.current
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberTextCopier()
     val colorScheme = MaterialTheme.colorScheme
     val semantic = JCodeTheme.semanticColors
     val backgroundArgb = colorScheme.background.toArgb()
@@ -341,7 +340,7 @@ fun MarkdownPreviewPage(
                     offset = offset,
                     quickActions = listOf(
                         ContextAction(JCodeIcon.Copy, "Copy", enabled = selectedText.isNotEmpty()) {
-                            clipboard.setText(AnnotatedString(selectedText))
+                            copyText(selectedText)
                         },
                     ),
                     listActions = listOfNotNull(

@@ -175,17 +175,17 @@ coexist, and it is guarded by `android.permission.MANAGE_DOCUMENTS`, which only 
 
 | Item | Value | Source |
 |---|---|---|
-| AGP | 8.13.0 | `gradle/libs.versions.toml` |
-| Gradle | 8.14.3 | `gradle/wrapper/gradle-wrapper.properties` |
-| Kotlin | 2.2.20 (KSP 2.2.20-2.0.2) | `gradle/libs.versions.toml` |
+| AGP | 9.5.1 (Kotlin built in) | `gradle/libs.versions.toml` |
+| Gradle | 9.9.2 | `gradle/wrapper/gradle-wrapper.properties` |
+| Kotlin | 2.4.21 (KSP 2.3.14) | `gradle/libs.versions.toml` |
 | JVM toolchain | 21 (Hilt's javac forced to 17) | `build.gradle.kts` |
-| `compileSdk` | 36 | `app/build.gradle.kts` |
+| `compileSdk` | 37.1 (Compose 1.13 needs it), every module | root `build.gradle.kts` |
 | `minSdk` / `targetSdk` | 33 / 33 | `app/build.gradle.kts` |
-| NDK | 27.2.12479018 | `app/build.gradle.kts`, root `build.gradle.kts` |
-| CMake | 3.28.3 desired, auto-detected from `$ANDROID_HOME/cmake` | root `build.gradle.kts` |
+| NDK | 30.0.16248370 | root `build.gradle.kts` (`jcodeNdkVersion`) |
+| CMake | 3.31.6 desired, else the newest installed 3.x at or above 3.24 from `$ANDROID_HOME/cmake` | root `build.gradle.kts` |
 | C / C++ standard | C11 / C++17, `-fvisibility=hidden` | `native/CMakeLists.txt` |
 | ABI | `arm64-v8a`, every variant | `app/build.gradle.kts`, root `build.gradle.kts` |
-| Compose BOM | 2025.01.00, Material3 1.3.1 | `gradle/libs.versions.toml` |
+| Compose BOM | 2026.11.01 (Material3 1.5.0) | `gradle/libs.versions.toml` |
 
 Full detail in [Build variants and release](../09-platform/02-build-variants-and-release.md).
 

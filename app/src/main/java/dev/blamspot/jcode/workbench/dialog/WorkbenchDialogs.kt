@@ -353,7 +353,7 @@ internal fun NewItemDialog(
                         // The extension takes it from here: it draws the variants, asks whatever it
                         // needs and scaffolds. The name travels with the view, so nobody types it
                         // twice.
-                        onOpenGallery(selectedTemplate!!.extensionId, gallery, name.trim())
+                        onOpenGallery(selectedTemplate.extensionId, gallery, name.trim())
                         onDismiss()
                     } else if (step == 0 && hasInputs) {
                         step = 1

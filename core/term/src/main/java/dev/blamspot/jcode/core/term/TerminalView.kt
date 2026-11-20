@@ -998,7 +998,7 @@ class TerminalView @JvmOverloads constructor(
         // and fall through to the table below. Ctrl+L now sends raw 0x0C so the running program
         // (readline, vim, Claude Code) decides what to do, instead of us injecting a clear sequence.
         if (isCtrl && !isAlt) {
-            val base = event?.getUnicodeChar(0) ?: 0
+            val base = event.getUnicodeChar(0)
             if (base != 0) {
                 ctrlByteFor(base.toChar())?.let { sendInput(byteArrayOf(it)); return true }
             }

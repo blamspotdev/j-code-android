@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
@@ -31,7 +30,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * JCode's shared compact search field: a bordered rounded surface with a leading search glyph, a
- * dense [BasicTextField] (bodySmall), and a trailing clear affordance. The manager panels and the
+ * dense [ValueTextField] (bodySmall), and a trailing clear affordance. The manager panels and the
  * command palette both use it so search inputs read identically across the app.
  */
 @Composable
@@ -76,7 +75,7 @@ fun CompactSearchField(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                BasicTextField(
+                ValueTextField(
                     value = query,
                     onValueChange = onQueryChange,
                     singleLine = true,
