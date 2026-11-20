@@ -144,6 +144,7 @@ class WorkspaceManager @Inject constructor(
             // would create a NEW empty Default Workspace and orphan every existing project.
             migrateProjectsToExt4IfNeeded()
             val workspace = ensureDefaultWorkspace()
+            dropWorkspaceRowsFromDefault(workspace)
             _breadcrumb.value = listOf(WorkspaceCrumb(workspace.id, workspace.name))
             currentWorkspaceId.value = workspace.id
         }
@@ -317,10 +318,10 @@ class WorkspaceManager @Inject constructor(
 
     /**
      * Like [createNode] but places the folder under an explicitly chosen [workspaceId] (its flat
-     * projects root for the Default Workspace, else that workspace's own folder) and registers the
-     * project there. Unlike [createNode] it never reads the async [currentWorkspace] flow, so it is
-     * safe to call right after requesting a workspace switch (e.g. the Source Control clone flow's
-     * destination selector) without racing the switch.
+     * projects root for the Default Workspace, else that workspace's own folder) and registers it
+     * there through [registerNodeIn]. Unlike [createNode] it never reads the async
+     * [currentWorkspace] flow, so it is safe to call right after requesting a workspace switch (e.g.
+     * the Source Control clone flow's destination selector) without racing the switch.
      */
     suspend fun createNodeIn(
         workspaceId: Long,
@@ -337,16 +338,51 @@ class WorkspaceManager @Inject constructor(
         val path = FsPath.Local(directory)
         validateWritable(path)
         writeNodeConfig(directory, nodeType, templateId)
+        return registerNodeIn(path, workspaceId, nodeType, templateId)
+    }
+
+    /**
+     * Register a new node under [workspaceId], except a top-level workspace: the Default Workspace's
+     * single slot would hand it back as the open project once the workspace closed. That node is
+     * reached through Recent and its own [WorkspaceEntity], so it is returned unregistered (id 0).
+     */
+    private suspend fun registerNodeIn(
+        path: FsPath.Local,
+        workspaceId: Long,
+        nodeType: WorkspaceNodeType,
+        templateId: String?,
+    ): Project {
+        if (nodeType == WorkspaceNodeType.Workspace && workspaceId == ensureDefaultWorkspaceId()) {
+            return Project(
+                id = 0L,
+                kind = ProjectKind.Local,
+                location = path.file.absolutePath,
+                name = sanitizedFolderName(path.file.name),
+                distroBindTarget = "",
+                order = 0,
+                nodeType = nodeType,
+            )
+        }
         return registerProjectIn(path, workspaceId).copy(nodeType = nodeType, templateId = templateId)
     }
 
     /**
+     * Drop the rows earlier builds gave top-level workspaces in the Default Workspace. SAF rows are
+     * kept: a SAF tree cannot be entered as a workspace, so its row is all that reaches it.
+     */
+    private suspend fun dropWorkspaceRowsFromDefault(default: Workspace) = withContext(Dispatchers.IO) {
+        default.projects
+            .filter { it.kind == ProjectKind.Local && nodeMeta(it.fsPath).first == WorkspaceNodeType.Workspace }
+            .forEach { workspaceDao.deleteProject(it.id) }
+    }
+
+    /**
      * Move an already-populated staged folder (e.g. a clone from the /sources staging dir) under
-     * [workspaceId]'s base dir and register it there as [nodeType]. The folder name is uniquified on
-     * collision ("-1", "-2", …). Same-filesystem rename is attempted first; a copy+delete fallback
-     * covers the (unexpected) cross-device case. The type is upserted into the folder's `.jcode`
-     * config rather than written over it — a cloned repo may ship one, and its settings are the
-     * user's, not ours to drop.
+     * [workspaceId]'s base dir and register it there as [nodeType] through [registerNodeIn]. The
+     * folder name is uniquified on collision ("-1", "-2", …). Same-filesystem rename is attempted
+     * first; a copy+delete fallback covers the (unexpected) cross-device case. The type is upserted
+     * into the folder's `.jcode` config rather than written over it — a cloned repo may ship one, and
+     * its settings are the user's, not ours to drop.
      */
     suspend fun adoptFolderIn(workspaceId: Long, staged: File, nodeType: WorkspaceNodeType): Project {
         val destination = withContext(Dispatchers.IO) {
@@ -371,7 +407,7 @@ class WorkspaceManager @Inject constructor(
         }
         return try {
             setFolderType(FsPath.Local(destination), nodeType)
-            registerProjectIn(FsPath.Local(destination), workspaceId).copy(nodeType = nodeType, templateId = null)
+            registerNodeIn(FsPath.Local(destination), workspaceId, nodeType, templateId = null)
         } catch (t: Throwable) {
             // Registration failed after the move: return the folder to staging so it stays visible in
             // the staging list instead of vanishing from every UI.

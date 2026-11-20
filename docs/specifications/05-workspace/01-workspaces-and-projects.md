@@ -114,6 +114,12 @@ Covered in detail in
 `adoptFolderIn` is the clone-staging hand-off: a repository cloned into `/sources` is classified by
 the user and moved under the projects root as a Project or a Workspace.
 
+`createNodeIn` and `adoptFolderIn` register the new folder as a node of `workspaceId`, except a
+Workspace made at the top level. The Default Workspace's single slot is its open project, so a row
+there handed the workspace back as an open project once it was closed. That node is returned
+unregistered (id 0) and is reached through Recent and its own `WorkspaceEntity`; startup drops the
+rows earlier builds made. A workspace nested in a User Workspace is still registered there.
+
 `resolveManageable` remaps a SAF tree URI back to a local `File` when the provider is the local
 filesystem, which is what lets an "Open folder" via SAF still be bind-mounted into the distro. When
 the remap fails the folder remains editable but not buildable.
